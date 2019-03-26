@@ -1,0 +1,954 @@
+---
+title: "Social Network Analysis - Group Assignment 01"
+author: "MBD O17 (Group G)"
+date: "14/02/2019"
+output:
+  html_document:
+    df_print: paged
+    theme: yeti
+---
+
+***
+
+On this first assignment, applying the basic functions of the Igraph package is required. The following datasets are going to be used:
+
+* Actors dataset - undirected graph - : For the 2005 Graph Drawing conference a data set was provided of the IMDB movie database. We will use a reduced version of this dataset, which derived all actor-actor collaboration edges where the actors co-starred in at least 2 movies together between 1995 and 2004. 
+
+* Wikipedia Dataset - directed graph - . The vertices of this network are wikipedia pages. The label of each vertex is the title of the wikipedia page. Edges represent hyperlinks between wikipedia pages; that is, if there is an edge from page A to page B, it means that page A has an hyperlink to page B. The dataset is available at: https://www.cs.upc.edu/~CSN/lab/wikipedia.gml
+
+
+You have to complete the code chunks in this document but also analyze the results, extract insights and describe them in an understandable way.
+
+<span style="color:blue">Please, write all your conclusions in blue</span>.
+
+</br></br>
+
+***
+
+# Loading data
+
+In this section, the goal is loading the datasets given, building the graph and analyzing basics metrics. Include the edge or node attributes you consider.
+
+Describe the values provided by summary function on the graph object.
+
+```{r Packages, echo = FALSE, include = FALSE, warning=FALSE, message=FALSE}
+### INSTALL AND LOAD PACKAGES
+packages_list <- c('igraph',
+                   'stringr',
+                   'ggplot2',
+                   'gridExtra',
+                   'ggthemes',
+                   'kableExtra',
+                   'cluster'
+                   )
+
+for (i in packages_list){
+  if(!i%in%installed.packages()){
+    install.packages(i, dependencies = TRUE, repos = "http://cran.us.r-project.org")
+    library(i, character.only = TRUE)
+    print(paste0(i, ' has been installed'))
+  } else {
+    print(paste0(i, ' is already installed'))
+    library(i, character.only = TRUE)
+  }
+}
+```
+
+</br>
+
+#### Actors Dataset
+
+<span style="color:blue">
+The two dataset files have been stored on GitHub Gists to ease their access. To generate the graph, we assigned the `actor_edges` data to the links, and the `actors_key` data to the nodes.
+</span>
+
+```{r Actors Datasets, echo = TRUE, include = TRUE, warning = FALSE}
+### ACTOR DATASET
+actors_key <- read.table("https://gist.githubusercontent.com/ashomah/8858d572cf8fa817404476d6542bea4a/raw/94596961279d36fb85069a2b25e7052af4795bf8/imdb_actors_key.tsv", sep = '\t', header = TRUE)
+actors_edges <- read.table(file="https://gist.githubusercontent.com/ashomah/fb55ffc14e16b4dd45b8eec4e237303d/raw/27e1cd4ff35d1a3cadf3cb7a812932df272a071c/imdb_actor_edges.tsv",sep="\t",header=TRUE)
+
+actors_key$name <- as.character(actors_key$name)
+actors_key$genres <- as.character(actors_key$genres)
+
+actors_links <- actors_edges
+actors_nodes <- actors_key
+actors_g <- graph_from_data_frame(d=actors_links, vertices = actors_nodes, directed = FALSE)
+print(actors_g)
+```
+
+<span style="color:blue">
+As a result, we get a undirected graph providing the links between actors, displaying their names and providing additional information such as the number of movies they playing in, their main genre, and the list of genres they played in.
+</span>
+
+</br>
+
+#### Wikipedia Dataset
+
+<span style="color:blue">
+The dataset is automatically read as a graph.
+</span>
+
+```{r Wiki Dataset, echo = TRUE, include = TRUE, warning = FALSE, message = FALSE}
+### WIKI DATASET
+wiki <- read.graph('https://www.cs.upc.edu/~CSN/lab/wikipedia.gml', 'gml')
+print(wiki)
+```
+
+<span style="color:blue">
+This graph is directed. Vertices use their id numbers, with labels being hold as attributes which are not directly displayed in the graph.
+</span>
+
+</br></br>
+
+***
+
+# Degree distribution
+
+Represent the degree distribution of both networks. For directed graphs, compute the total degree distribution considered the graph as undirected, the in-degree distribution and the out-degree distribution.
+*How do these distributions look like? Are they similar? What about their means? And their standard deviations with respect to the mean?*
+
+```{r Color Palette, echo = FALSE, include = FALSE}
+# Color Palette
+color1 = 'black'
+color2 = 'white'
+color3 = 'gold1'
+color4 = 'darkorchid3'
+font1 = 'Impact'
+font2 = 'Helvetica'
+```
+
+</br>
+
+#### Actors Network 
+```{r Actors Graph, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+# Actors Undirected
+deg_all_a <- igraph::degree(actors_g, mode="total")
+deg_in_a  <- igraph::degree(actors_g, mode="in") # not needed
+deg_out_a <- igraph::degree(actors_g, mode="out") # not needed
+
+g1 <- qplot(deg_all_a,
+      geom="histogram",
+      binwidth = 0.5,  
+      main = "Degree Distribution for Actors", 
+      xlab = "Degree",  
+      fill=I(color3))+
+      theme_tufte(ticks=F)+
+      xlim(0, 300)+
+      theme(axis.title = element_blank(),
+            axis.text.y = element_blank(),
+            axis.text.x = element_text(color = color2, family = font2),
+            plot.background = element_rect(fill = color1, color = color1),
+            title = element_text(colour = color2, family = font2))
+
+deg_dist_actors <- degree_distribution(actors_g, cumulative=T, mode="all")
+g2 <- qplot(x=0:max(deg_all_a), y=1-deg_dist_actors,
+      geom="point", 
+      main = "Degree Distribution for Actors", 
+      xlab = "Degree",  
+      colour = 'gold1')+
+      theme_tufte(ticks=F)+
+      theme(axis.title = element_blank(),
+            axis.text.y = element_blank(),
+            axis.text.x = element_text(color = color2, family = font2),
+            plot.background = element_rect(fill = color1, color = color1),
+            title = element_text(colour = color2, family = font2),
+            legend.position = 'None')
+
+plot_g <- list()
+plot_g[[1]] <- g1
+plot_g[[2]] <- g2
+
+grid.arrange(grobs = plot_g,
+             nrow = 1,
+             ncol = 2)
+```
+
+</br>
+
+#### Wikipedia Network - Total Degree
+```{r Wiki Graph Total Degree, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+# Wikipedia Total Degree
+deg_all_w <- igraph::degree(wiki, mode="total")
+deg_in_w  <- igraph::degree(wiki, mode="in")
+deg_out_w <- igraph::degree(wiki, mode="out")
+
+g3 <- qplot(deg_all_w,
+      geom="histogram",
+      binwidth = 0.5,  
+      main = "Degree Distribution for Wikipedia (ALL)", 
+      xlab = "Age",  
+      fill=I(color3))+
+      theme_tufte(ticks=F)+
+      xlim(0, 50)+
+      theme(axis.title = element_blank(),
+            axis.text.y = element_blank(),
+            axis.text.x = element_text(color = color2, family = font2),
+            plot.background = element_rect(fill = color1, color = color1),
+            title = element_text(colour = color2, family = font2))
+
+deg_dist_wiki_all <- degree_distribution(wiki, cumulative=T, mode="all")
+g4 <- qplot(x=0:max(deg_all_w), y=1-deg_dist_wiki_all,
+      geom="point", 
+      main = "Degree Distribution for Wikipedia (ALL)", 
+      xlab = "Age",  
+      colour = 'gold1')+
+      theme_tufte(ticks=F)+
+      theme(axis.title = element_blank(),
+            axis.text.y = element_blank(),
+            axis.text.x = element_text(color = color2, family = font2),
+            plot.background = element_rect(fill = color1, color = color1),
+            title = element_text(colour = color2, family = font2),
+            legend.position = 'None')
+
+grid.arrange(g3, g4,
+             nrow = 1,
+             ncol = 2)
+```
+
+</br>
+
+#### Wikipedia Network - In-Degree
+```{r Wiki Graph In-Degree, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+# Wikipedia In-Degree
+g5 <- qplot(deg_in_w,
+      geom="histogram",
+      binwidth = 0.5,  
+      main = "Degree Distribution for Wikipedia (IN)", 
+      xlab = "Degree",  
+      fill=I(color3))+
+      theme_tufte(ticks=F)+
+      xlim(0, 50)+
+      theme(axis.title = element_blank(),
+            axis.text.y = element_blank(),
+            axis.text.x = element_text(color = color2, family = font2),
+            plot.background = element_rect(fill = color1, color = color1),
+            title = element_text(colour = color2, family = font2))
+
+deg_dist_wiki_in <- degree_distribution(wiki, cumulative=T, mode="in")
+g6 <- qplot(x=0:max(deg_in_w), y=1-deg_dist_wiki_in,
+      geom="point", 
+      main = "Degree Distribution for Wikipedia (IN)", 
+      xlab = "Degree",  
+      colour = 'gold1')+
+      theme_tufte(ticks=F)+
+      theme(axis.title = element_blank(),
+            axis.text.y = element_blank(),
+            axis.text.x = element_text(color = color2, family = font2),
+            plot.background = element_rect(fill = color1, color = color1),
+            title = element_text(colour = color2, family = font2),
+            legend.position = 'None')
+
+grid.arrange(g5, g6,
+             nrow = 1,
+             ncol = 2)
+```
+
+</br>
+
+#### Wikipedia Network - Out-Degree
+```{r Wiki Graph Out-Degree, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+# Wikipedia Out-Degree
+g7 <- qplot(deg_out_w,
+      geom="histogram",
+      binwidth = 0.5,  
+      main = "Degree Distribution for Wikipedia (OUT)", 
+      xlab = "Degree",  
+      fill=I(color3))+
+      theme_tufte(ticks=F)+
+      xlim(0, 50)+
+      theme(axis.title = element_blank(),
+            axis.text.y = element_blank(),
+            axis.text.x = element_text(color = color2, family = font2),
+            plot.background = element_rect(fill = color1, color = color1),
+            title = element_text(colour = color2, family = font2))
+
+deg_dist_wiki_out <- degree_distribution(wiki, cumulative=T, mode="out")
+g8 <- qplot(x=0:max(deg_out_w), y=1-deg_dist_wiki_out,
+      geom="point", 
+      main = "Degree Distribution for Wikipedia (OUT)", 
+      xlab = "Degree",  
+      colour = 'gold1')+
+      theme_tufte(ticks=F)+
+      theme(axis.title = element_blank(),
+            axis.text.y = element_blank(),
+            axis.text.x = element_text(color = color2, family = font2),
+            plot.background = element_rect(fill = color1, color = color1),
+            title = element_text(colour = color2, family = font2),
+            legend.position = 'None')
+
+grid.arrange(g7, g8,
+             nrow = 1,
+             ncol = 2)
+```
+
+</br>
+
+#### Means
+```{r Means, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+# Network Means
+mean_actors <- round(mean(deg_all_a),2)
+mean_wiki_all <- round(mean(deg_all_w),2)
+mean_wiki_in <- round(mean(deg_in_w),2)
+mean_wiki_out <- round(mean(deg_out_w),2)
+paste_means <- paste('Mean for Actors Distribution',mean_actors,'Mean for Wikipedia Distribution (ALL)', mean_wiki_all,'Mean for Wikipedia Distribution (IN)', mean_wiki_in,'Mean for Wikipedia Distribution (OUT)', mean_wiki_out, sep="\n")
+cat(paste_means)
+```
+
+</br>
+
+#### Standard Deviations
+```{r Std, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+# Network Standard Deviations
+sd_actors <- round(sd(deg_all_a),2)
+sd_wiki_all <- round(sd(deg_all_w),2)
+sd_wiki_in <- round(sd(deg_in_w),2)
+sd_wiki_out <- round(sd(deg_out_w),2)
+paste_sd <- paste('St.Dev for Actors Distribution', sd_actors,'St.Dev for Wikipedia Distribution (ALL)', sd_wiki_all,'St.Dev for Wikipedia Distribution (IN)', sd_wiki_in,'St.Dev for Wikipedia Distribution (OUT)', sd_wiki_out, sep="\n")
+cat(paste_sd)
+```
+
+</br>
+
+<span style="color:blue">
+The degree of a node is the number of neighbours of the node. Undirected network nodes have only one degree, while directed network nodes have two different degrees: the in-degree and the out-degree. Typically, the out-degree is considered as more important. We might observe, however, that the true degree distribution of a directed network is a joint distribution of in- and out- degrees. By using a joint distribution, we can investigate the correlation of the in- and out- degrees of vertices (for instance, if vertices with high out-degree tend to have also high in-degree).
+</span>
+
+<span style="color:blue">
+In most real networks, like in our two datasets, the degree distribution is highly **asymmetric** (or skewed). Most of the nodes have low degrees, while a small but significant fraction of nodes have an extremely high degree.
+</span>
+
+<span style="color:blue">
+Regarding the means of the distributions, the mean of the actors degree distribution is more than 5 times the means of the Wikipedia degree distributions. Also, the means of the in and out degree distributions are basically the components of the overall mean.
+</span>
+
+<span style="color:blue">
+Regarding the standard deviations of the distributions, the standard deviation of the actors degree distribution is about 3.5 times the standard deviation of the Wikipedia degree distributions.
+</span>
+
+</br></br>
+
+***
+
+# Network Diameter and Average Path Length
+Compare the network diameter and the average path length of both networks. Consider the actors graph as unweighted.
+*Does the Wikipedia graph have a larger diameter than the actors graph? Why? What about the average path length? *
+
+</br>
+
+#### Diameters
+```{r Diameters, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+diam_actors_g <- diameter(actors_g, directed=F, weights=NA)
+diam_wiki <- diameter(wiki, directed=T, weights=NA)
+paste_diam <- paste('Network Diameter for Actors',diam_actors_g,'Network Diameter for Wikipedia', diam_wiki, sep="\n")
+cat(paste_diam)
+```
+
+<span style="color:blue">
+Another measure for the structure of a graph is its **diameter**. The diameter is an index measuring the extent of a graph by counting the number of edges in the shortest path between the most distant vertices. In our case, it makes sense for the path of Wikipedia to have a larger diameter as it is consisted of twice as much vertices as the actors dataset.
+</span>
+
+</br>
+
+#### Average Path Lengths
+```{r Average Path Lengths, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+# Average Path Lengths
+avg_path_actors_g <- mean_distance(actors_g, directed=F)
+avg_path_wiki <- mean_distance(wiki, directed=F)
+paste_avg_path <- paste('Average Path Length for Actors',round(avg_path_actors_g,2),'Average Path Length for Wikipedia', round(avg_path_wiki,2), sep="\n")
+cat(paste_avg_path)
+```
+
+<span style="color:blue">
+The mean path length is the average of the shortest path length, averaged over all pairs of nodes. So, we take sum of all shortest paths between all vertices and divide number of all possible paths.
+</span>
+
+<span style="color:blue">
+Taking this into account, an immediate conclusion is that the average path length for the wikipedia is larger than the one of the actors, as the diameter of the actors graph is higher than the one of the first.
+</span>
+
+<span style="color:blue">
+However, as there are many more possible paths in the Wikipedia network, the average path lengths difference is not as important as the diameters difference.
+</span>
+
+</br></br>
+
+Compare the global clustering coefficient and the average local clustering coefficient of both networks. Consider all graphs as undirected and unweighted.
+*Does Wikipedia network have a larger clustering coefficient than the actors graph? Why?*
+
+</br>
+
+#### Global Transitivities
+```{r Global Transitivity, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+transitivity_actors_global <- transitivity(actors_g, type="undirected",weights=NA) # undirected calculates global
+transitivity_wiki_global <- transitivity(wiki, type="undirected",weights=NA)
+paste_transitivity_global <- paste('Global Transitivity for Actors',round(transitivity_actors_global,2),'Global Transitivity for Wikipedia', round(transitivity_wiki_global,2), sep="\n")
+cat(paste_transitivity_global)
+```
+
+</br>
+
+#### Local Transitivities
+```{r Local Transitivity, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+transitivity_actors_local <- transitivity(actors_g, type="average",weights=NA)
+transitivity_wiki_local <- transitivity(wiki, type="average", weights=NA)
+paste_transitivity_local <- paste('Avg Local Transitivity for Actors',round(transitivity_actors_local,2),' Avg Local Transitivity for Wikipedia', round(transitivity_wiki_local,2), sep="\n")
+cat(paste_transitivity_local)
+```
+
+</br>
+
+<span style="color:blue">
+In graph theory, a **clustering coefficient** is a value of degree at which nodes tend to cluster together.
+</span>
+
+<span style="color:blue">
+Two versions of this measure exist: the **global** and the **local**. The global version was designed to give an overall indication of the clustering in the network, whereas the local gives an indication of the embeddedness of single nodes.
+</span>
+
+</br>
+
+<span style="color:blue">
+*Global clustering coefficient*
+</span>
+
+<span style="color:blue">
+The global clustering coefficient is based on triplets of nodes (three nodes connected to each others). The global clustering coefficient is the number of closed triplets (or 3 x triangles) over the total number of triplets (both open and closed). This measure gives an indication of the clustering in the whole network (global), and can be applied to both undirected and directed networks.
+</span>
+
+</br>
+
+<span style="color:blue">
+*Local clustering coefficient*
+</span>
+
+<span style="color:blue">
+The local clustering of each node in a graph, is the fraction of triangles that actually exist over all possible triangles in its neighborhood. The average clustering coefficient of a graph is the mean of local clusterings.
+</span>
+
+</br>
+
+<span style="color:blue">
+In our case we can observe that:
+</span>
+
+<span style="color:blue">
+1. The global and local clustering coefficient for the actors' network are almost equal.
+</span>
+
+<span style="color:blue">
+2. Even though the actors' graph has a lower degree, its clustering coefficients are higher than the ones of the Wikipedia data.
+</span>
+
+</br></br>
+
+***
+
+# Node importance: Centrality measures
+
+## Actors' Network
+Obtain the distribution of the number of movies made by an actor and the number of genres in which an actor starred in. It may be useful to analyze and discuss the results to be obtained in the following exercises.
+
+</br>
+
+#### Number of Movies per Actor Distribution
+```{r Movies Distribution, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+actors_nodes_distribution <- actors_key
+actors_nodes_distribution$number_genres <- str_count(actors_nodes_distribution$genres, ':')
+actors_nodes_distribution$genres <- NULL
+
+ggplot(actors_nodes_distribution, aes(x=movies_95_04))+geom_histogram(binwidth = 0.5, fill=color3)+
+  theme_minimal()+
+  theme(title = element_text(),
+        panel.grid.major = element_blank(), 
+        plot.background = element_rect(fill = color1, color = color1),
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(),
+        axis.title = element_blank(), 
+        axis.text.x = element_text(color = color2, family = font2, size = 6),
+        axis.text.y = element_text(color = color2, family = font2, size = 6))+
+  annotate('text', label = "Movies Distribution", family = font1, color = color3, size = 4, x=300, y=1500)
+```
+
+</br>
+
+#### Number of Genres per Actor
+```{r Genres Distribution, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+ggplot(actors_nodes_distribution, aes(x=number_genres))+geom_histogram(binwidth = 0.5, fill=color3)+theme_minimal()+
+  theme(panel.grid.major = element_blank(), 
+        plot.background = element_rect(fill = color1, color = color1),
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(),
+        axis.title = element_blank(), 
+        axis.text = element_blank(),
+        axis.text.x = element_text(color = color2, family = font2, size = 6),
+        axis.text.y = element_text(color = color2, family = font2, size = 6))+
+  annotate('text', label = "Number of Genres", family = font1, color = color3, size = 5, x=14, y=2000)+
+  annotate('text', label = "Distribution", family = font1, color = color3, size = 5, x=14, y=1700)
+```
+
+</br>
+
+#### Main Genres Distribution
+```{r Main Genres Distribution, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+ggplot(actors_nodes_distribution, aes(x=main_genre))+geom_bar(fill=color3)+theme_minimal()+
+  theme(panel.grid.major = element_blank(), 
+        plot.background = element_rect(fill = color1, color = color1),
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(),
+        axis.title = element_blank(), 
+        axis.text = element_blank(),
+        axis.text.x = element_text(color = color2, family = font2, size = 6, angle=45),
+        axis.text.y = element_text(color = color2, family = font2, size = 6))+
+  annotate('text', label = "Main Genres", family = font1, color = color3, size = 5, x=14, y=5000)+
+  annotate('text', label = "Distribution", family = font1, color = color3, size = 5, x=14, y=4400)
+```
+
+</br>
+
+Obtain three vectors with the degree, betweeness and closeness for each vertex of the actors' graph.
+
+```{r Actors Vectors, echo=FALSE, include=FALSE, eval = FALSE}
+# For convenience, this chunk is skipped while generating the report. Vectors are instead read from a GitHub repository.
+actors_dg = igraph::degree(actors_g)
+saveRDS(actors_dg, file = '/Users/Ashley/Documents/GitHub/Social-Network-Analysis-Course/actors_dg.rds')
+
+actors_bt = igraph::betweenness(actors_g, directed = FALSE)
+saveRDS(actors_bt, file = '/Users/Ashley/Documents/GitHub/Social-Network-Analysis-Course/actors_bt.rds')
+
+actors_cl = igraph::closeness(actors_g)
+saveRDS(actors_cl, file = '/Users/Ashley/Documents/GitHub/Social-Network-Analysis-Course/actors_cl.rds')
+```
+
+```{r Download Vectors from GitHub, echo=FALSE, include=FALSE}
+actors_dg <- readRDS(gzcon(url('https://github.com/ashomah/Social-Network-Analysis-Course/raw/master/actors_dg.rds')))
+actors_bt <- readRDS(gzcon(url('https://github.com/ashomah/Social-Network-Analysis-Course/raw/master/actors_bt.rds')))
+actors_cl <- readRDS(gzcon(url('https://github.com/ashomah/Social-Network-Analysis-Course/raw/master/actors_cl.rds')))
+```
+
+#### Degree Vector
+```{r Summary Degree, echo=FALSE, include=TRUE}
+head(actors_dg,12)
+```
+
+#### Betweenness Vector
+```{r Summary Betweenness, echo=FALSE, include=TRUE}
+head(actors_bt,12)
+```
+
+#### Closeness Vector
+```{r Summary Closeness, echo=FALSE, include=TRUE}
+head(actors_cl,12)
+```
+
+</br></br>
+
+Obtain the list of the 20 actors with the largest degree centrality . Show a list with the degree, betweenness, and closeness centralities, the name of the actor, the number of movies, the main genre, and the number of genres in which the actor has participated.
+*How do you explain the high degree of the top-20 list? *
+
+#### Top 20 Degree Centrality
+```{r Top 20 Degree, echo=FALSE ,include=TRUE}
+top_20_dg <- head(sort(actors_dg, decreasing = TRUE) ,20)
+top_20_dg_df <- data.frame(name = names(top_20_dg), degree = top_20_dg)
+top_20_dg_bt <- actors_bt[names(actors_bt) %in% names(top_20_dg)]
+top_20_dg_cl <- actors_cl[names(actors_cl) %in% names(top_20_dg)]
+top_20_dg_edges <- actors_key[actors_key$name %in% names(top_20_dg),]
+
+top_20_dg_df$betweenness <- top_20_dg_bt[match(top_20_dg_df$name, names(top_20_dg_bt))]
+top_20_dg_df$closeness <- top_20_dg_cl[match(top_20_dg_df$name, names(top_20_dg_cl))]
+top_20_dg_info <- merge(x = top_20_dg_df, y = top_20_dg_edges, by.x = 'name', by.y = 'name')
+top_20_dg_info$id <- NULL
+
+top_20_dg_info$number_genres <- str_count(top_20_dg_info$genres, ':')
+top_20_dg_info$genres <- NULL
+top_20_dg_info <- top_20_dg_info[order(top_20_dg_info$degree, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "movies_95_04", "main_genre", "number_genres")]
+remove(list = c('top_20_dg', 'top_20_dg_bt', 'top_20_dg_cl', 'top_20_dg_df', 'top_20_dg_edges'))
+
+kable(top_20_dg_info, format="markdown")
+```
+
+<span style="color:blue">
+First, it is important to understand that the Actor's dataset is undirected. For this particular case, the measurement of Degree Centrality returns the central nodes which are those that have most links with other nodes. 
+</span>
+
+<span style="color:blue">
+Based on the previous definition (Degree Centrality for Undirected Graphs), the resulting list contains the top-20 actors that have the highest number of connections to other actors. They all have in common the main genre which is "Adult", except for one that is "Family", and a very high numbers of movies made. They also played in a lot of other genres, which might explain why these actors have many connections with other actors that don't specifically belong to the Adult genre.
+</span>
+
+</br></br>
+
+Obtain the list of the 20 actors with the largest betweenness centrality . Show a list with the degree, betweenness, and closeness centralities, the name of the actor, the number of movies, the main genre, and the number of genres in which the actor has participated.
+*Is this list similar to the one obtained for degree centrality? Why? How do you explain the high betweenness of the top-20 list?*
+
+#### Top 20 Betweenness Centrality
+```{r Top 20 Betweenness, echo=FALSE ,include=TRUE}
+top_20_bt <- head(sort(actors_bt, decreasing = TRUE) ,20)
+top_20_bt_df <- data.frame(name = names(top_20_bt), betweenness = top_20_bt)
+top_20_bt_dg <- actors_dg[names(actors_dg) %in% names(top_20_bt)]
+top_20_bt_cl <- actors_cl[names(actors_cl) %in% names(top_20_bt)]
+top_20_bt_edges <- actors_key[actors_key$name %in% names(top_20_bt),]
+
+top_20_bt_df$degree <- top_20_bt_dg[match(top_20_bt_df$name, names(top_20_bt_dg))]
+top_20_bt_df$closeness <- top_20_bt_cl[match(top_20_bt_df$name, names(top_20_bt_cl))]
+top_20_bt_info <- merge(x = top_20_bt_df, y = top_20_bt_edges, by.x = 'name', by.y = 'name')
+top_20_bt_info$id <- NULL
+
+top_20_bt_info$number_genres <- str_count(top_20_bt_info$genres, ':')
+top_20_bt_info$genres <- NULL
+top_20_bt_info <- top_20_bt_info[order(top_20_bt_info$betweenness, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "movies_95_04", "main_genre", "number_genres")]
+remove(list = c('top_20_bt', 'top_20_bt_dg', 'top_20_bt_cl', 'top_20_bt_df', 'top_20_bt_edges'))
+
+kable(top_20_bt_info, format='markdown')
+```
+
+<span style="color:blue">
+The Beetweenness Centrality measures how many shortest paths going through a node. It highlights how important a node is to link other nodes to each others.
+</span>
+
+<span style="color:blue">
+In this network, Betweenness Centrality of an actor can be understood as the fact that this actor has starred with important movie stars from different actors clusters, can reach many people through their relationships, and are key to connect and introduce actors to each others.
+</span>
+
+<span style="color:blue">
+It is interesting to note that this centrality is not necessarily related to the Degree Centrality. For instance, two of the top 3 actors have really small degrees, which means that they have mainly collaborated with international but not numerous stars.
+</span>
+
+</br></br>
+
+Obtain the list of the 20 actors with the largest closeness centrality . Show a list with the degree, betweenness, and closeness centralities, the name of the actor, the number of movies, the main genre, and the number of genres in which the actor has participated.
+*Is this list similar to the one obtained for degree and betweenness centralities? Why? How do you explain the high closeness of the top-20 list? *
+
+```{r Top 20 Closeness, echo=FALSE ,include=TRUE}
+top_20_cl <- head(sort(actors_cl, decreasing = TRUE) ,20)
+top_20_cl_df <- data.frame(name = names(top_20_cl), closeness = top_20_cl)
+top_20_cl_dg <- actors_dg[names(actors_dg) %in% names(top_20_cl)]
+top_20_cl_bt <- actors_bt[names(actors_bt) %in% names(top_20_cl)]
+top_20_cl_edges <- actors_key[actors_key$name %in% names(top_20_cl),]
+
+top_20_cl_df$degree <- top_20_cl_dg[match(top_20_cl_df$name, names(top_20_cl_dg))]
+top_20_cl_df$betweenness <- top_20_cl_bt[match(top_20_cl_df$name, names(top_20_cl_bt))]
+top_20_cl_info <- merge(x = top_20_cl_df, y = top_20_cl_edges, by.x = 'name', by.y = 'name')
+top_20_cl_info$id <- NULL
+
+top_20_cl_info$number_genres <- str_count(top_20_cl_info$genres, ':')
+top_20_cl_info$genres <- NULL
+top_20_cl_info <- top_20_cl_info[order(top_20_cl_info$closeness, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "movies_95_04", "main_genre", "number_genres")]
+remove(list = c('top_20_cl', 'top_20_cl_dg', 'top_20_cl_bt', 'top_20_cl_df', 'top_20_cl_edges'))
+
+kable(top_20_cl_info, format='markdown')
+```
+
+<span style="color:blue">
+The Closeness Centrality measures how close a node is from all the other nodes, considering the shortest distance to each node.
+</span>
+
+<span style="color:blue">
+In the case of the Actors Network, high Closeness Centrality means that the actor can easily reach most of the network through a minimum of connection levels. This top-20 regroups movie stars who played with other movie stars, each of them having many connections reducing the average distance to the rest of the network.
+</span>
+
+</br></br>
+
+## Wikipedia
+
+Obtain the list of the 20 Wikipedia pages with the largest out-degree centrality . Show a list with the outdegree, betweenness, and closeness centralities, and degree prestige, the Wikipedia identifier, and the title of the page (label).
+*How do you explain the high degree of the top-20 list? *
+
+```{r Top 20 Wiki Out-Degree, echo=FALSE ,include=TRUE, warning=FALSE}
+# Obtain relevant measures for all nodes
+wiki_out_degree <- centr_degree(wiki, mode = 'out',loops = TRUE)$res
+wiki_betweenness <- betweenness(wiki, v = V(wiki), directed = TRUE)
+wiki_closeness <- closeness(wiki, vids = V(wiki), mode = 'out')
+wiki_prestige <- page_rank(wiki)$vector
+wiki_index <- data.frame(wiki_out_degree,
+                         wiki_betweenness,
+                         wiki_closeness,
+                         wiki_prestige)
+
+# Obtain the relevant attributes from the data
+wiki_attr <- vertex_attr(wiki)
+attributes <- data.frame(wiki_attr$id, 
+                         wiki_attr$wikiid, 
+                         wiki_attr$label)
+
+# Combine node attributes and measures from above
+wiki_combined <- merge(wiki_index, attributes, 
+                           by.x = 0, by.y = 0)[ ,c('wiki_out_degree',
+                                                   'wiki_betweenness',
+                                                   'wiki_closeness',
+                                                   'wiki_prestige',
+                                                   'wiki_attr.wikiid',
+                                                   'wiki_attr.label')]
+colnames(wiki_combined) <- c('out_degree','betweenness','closeness',
+                             'prestige','wikipedia_id','page_label')
+wiki_outdegree_df <- wiki_combined[order(wiki_combined$out_degree, 
+                                             decreasing = TRUE)[1:20],]
+
+kable(wiki_outdegree_df, format='markdown')
+```
+
+<span style="color:blue">
+The top-20 list is mostly comprised of Wikipedia's list pages. In particular, pages listing mathematics articles have significant out-degree centrality. Since those pages only contain direct links to other Wikipedia pages, it only makes sense they are among the top-20 out-degree pages.
+</span>
+
+</br></br>
+
+Obtain the list of the 20 Wikipedia pages with the largest betweenness centrality . Show a list with the outdegree, betweenness, and closeness centralities, and degree prestige, the Wikipedia identifier, and the title of the page (label).
+*How do you explain the high betweenness of the top-20 list?*
+```{r Top 20 Wiki Betweenness, echo=FALSE ,include=TRUE, warning=FALSE}
+wiki_betweenness_df <- wiki_combined[order(wiki_combined$betweenness, 
+                                             decreasing = TRUE)[1:20],]
+
+kable(wiki_betweenness_df, format='markdown')
+```
+
+<span style="color:blue">
+The top-20 list is mostly comprised of broad and complex topics, implying many other pages may refer directly to the 'Calculus' page, and the 'Calculus' page refers directly to many other different articles. All pages in the top-20 share those same characteristics; they include complex topics, with many sub-notions that would have their own pages. 'Geometry', 'Symmetry', and 'Education' are other examples.  
+</span>
+
+</br></br>
+
+Obtain the list of the 20 Wikipedia pages with the largest closeness centrality . Show a list with the outdegree, betweenness, and closeness centralities, and degree prestige, the Wikipedia identifier, and the title of the page (label).
+*How do you explain the high closeness of the top-20 list?*
+
+```{r Top 20 Wiki Closeness, echo=FALSE ,include=TRUE, warning=FALSE}
+wiki_closeness_df <- wiki_combined[order(wiki_combined$closeness, 
+                                             decreasing = TRUE)[1:20],]
+
+kable(wiki_closeness_df, format = 'markdown')
+```
+
+<span style="color:blue">
+Degree closeness refers to how long it takes from a given node to get to all others. The list also includes wikipedia articles listing links to other pages, as well as dictionaries. Such wikipedia articles have high out-degree centralities; they are directly linked to several other pages, implying high closeness centrality.
+</span>
+
+</br></br>
+
+***
+
+# Network Models (Optional)
+Explore the Erd?s-Renyi model and compare its structural properties to those of real-world networks (Wikipedia and actors):
+
+* Degree distribution  P(k)
+* Network Diameter and Average Path Length
+* (Global and Local) Clustering Coefficient
+
+<span style="color:blue">
+The *Erdos-Renyi model* in graph theory, is a model of random binomial graphs, whereby all graphs possible can exist with given fixed number of nodes/vertices and fixed number of edges. Also, it supposes that a particular edge may exist independent of probability of other edges existing (subject to total fixed number of edges).
+</span>
+
+<span style="color:blue">
+The Erdos-Renyi model is written as `G(n, P)`, instead of `G(n, M)`, where the graph of n nodes has P probability of edges existing between each node. In such models, the graphs can be created basis the following:
+</span>
+
+<span style="color:blue">
+*Example 1:*
+</span>
+
+<span style="color:blue">
+`G(n,P) = G(4,1)` where the number of nodes `n = 4` and probability `P = 1`
+</span>
+
+<span style="color:blue">
+In this case, we can compute the number of edges as below:
+`No. of edges = ((n * (n-1)) / 2) * P = ((4 * (4-1)) / 2) * 1 = (4 * 3/2) * 1 = 6`
+</span>
+
+<span style="color:blue">
+Graphically, represented as follows:
+</span>
+
+```{r Example 1 Graph, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+ex1 <- erdos.renyi.game(4, 1, type="gnp", directed = FALSE, loops = FALSE)
+plot(ex1, edge.color="blue", vertex.color="yellow")
+```
+
+<span style="color:blue">
+*Example 2:*
+</span>
+
+<span style="color:blue">
+`G(n,P) = G(12, 0.25)` where the number of nodes `n = 12` and probability `P(of edge existing) = 0.25`.
+</span>
+
+<span style="color:blue">
+In this case, we can compute the number of edges as below:
+`No. of edges = ((n * (n-1)) / 2) * P = ((12 * (12-1)) / 2) * 0.25 = (6 * 11) 0.25 = 16.5`
+`(~ average 16.5 edges would be randomly generated)`
+</span>
+
+<span style="color:blue">
+Therefore, in a random graph under Erdos-Renyi model, all following graphs can be generated with example 2 above:
+</span>
+
+```{r Example 2 Graph, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+ex21 <- erdos.renyi.game(12, 0.25, type="gnp", directed = FALSE, loops = FALSE)
+ex22 <- erdos.renyi.game(12, 0.25, type="gnp", directed = FALSE, loops = FALSE)
+ex23 <- erdos.renyi.game(12, 0.25, type="gnp", directed = FALSE, loops = FALSE)
+
+par(mfrow=c(1,3))
+for (i in list(ex21, ex22, ex23)){plot(i, vertex.color='red', edge.color='blue')}
+```
+
+### Structure of Erdos-Renyi model compared to Wikipedia and Actor networks
+
+#### *1. Degree distribution  P(k)*
+
+<span style="color:blue">
+A random graph such as the Erdos-Renyi model follows a binomial degree distribution and for large numbers - it follows a poisson degree distribution, as compared to real networks (such as Wikipedia and Actors) - which follow a highly skewed degree distribution (heavy-tailed, where low-linked nodes are proportionately higher than average to high-linked nodes).
+</span>
+
+<span style="color:blue">
+This is primarily due to the random model providing a probability to the edge existing at each node, which follows a poisson distribution (centered around `mean = n * P`), whereas the real network's degree distribution is dependent on the interactions specifically undertaken by each node (i.e. the actors in Actor data and the Wiki editor in Wikipedia data).   
+</span>
+
+<span style="color:blue">
+In the illustrated random graph below (Example 3 of `G(n,P) = G(1000,0.50))`, we can observe the binomial distribution around average 500 (i.e. `n * P = 1000 * 0.50`):
+</span>
+
+```{r Example 3 Graph, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+ex3 <- erdos.renyi.game(1000, 0.5, type="gnp", directed = FALSE, loops = FALSE)
+
+ex3deg=degree(ex3, mode="all")
+
+erdegdis=qplot(ex3deg,
+               geom="histogram",
+               binwidth=1,
+               main = "Degree Distribution for Erdos-Renyi (Example 3 - Random graph of G(2000,0.50) created)",
+               log="y",
+               fill=I(color4))+
+  theme_tufte(ticks=T)+
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(color = color2, family = font2),
+        plot.background = element_rect(fill= color1, color = color1),
+        title = element_text(colour = color2, family=font2))
+
+grid.arrange(erdegdis, g1, g2, nrow=1, ncol=3)
+```
+
+</br>
+
+#### *2. Network Diameter and Average Path Length*
+
+<span style="color:blue">
+The Erdos-Renyi model is a good predictor of diameter and average path length compared to real networks.
+</span>
+
+<span style="color:blue">
+The model results in networks with small diameters and average path length, capturing very well the "small-world" property observed in many real networks. However, for large numbers the diameter and average path increments as log function of n (i.e. numbers of nodes).
+</span>
+
+<span style="color:blue">
+In the random graph G(1000,0.5): 
+</span>
+
+```{r Example 3 Diameter and Length, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+ex3diam=diameter(ex3)
+ex3avgpath= mean_distance(ex3, directed=F)
+
+print(paste('The diameter of G(1000,0.5) would be : ', ex3diam))
+print(paste('The average path length of G(1000,0.5) would be : ', round(ex3avgpath,4)))
+```
+
+</br>
+
+#### *3. (Global and Local) Clustering Coefficient*
+
+<span style="color:blue">
+1.  The Erdos-Renyi model is a poor predictor of clustering compared to real networks.
+</span>
+
+<span style="color:blue">
+2.  The model results in clustering coefficients that are too small and too close to the edge density, whereas most real networks are often highly clustered with clustering coefficients that are much greater (sometimes several orders of magnitude) than their edge densities.
+</span>
+
+```{r Example 3 Transitivity, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+ex3_global=transitivity(ex3, type="undirected",weights=NA)
+ex3_local=transitivity(ex3, type="average",weights=NA)
+
+cat(paste('Transitivity Global (Clustering Coefficient) for Example 3 where G(1000,0.5) is : ',round(ex3_global,2)),paste('Transitivity Local  (Clustering Coefficient) for Example 3 where G(1000,0.5) is : ', round(ex3_local,2)),sep='\n')
+```
+
+</br></br>
+
+***
+
+# Community detection (Optional)
+Use any community detection algorithm in the Wikipedia network and/or in the actors' network and discuss whether the communities found make sense according to the vertex labels.
+
+<span style="color:blue">
+We have used Walktrap community detection algorithm on the Wikipedia and Actors network (after deleting the vertices which do not have any edges (i.e. degree = 0) for sake of relevancy). Since walktrap community detection algorithm is a random walk method, we have kept the random walk steps at 200.
+</span>
+
+<span style="color:blue">
+Basis the high modularity of both the Wikipedia and actors network, we can conclude that they both have dense connections between the nodes within same communities (intra-community) but sparse connections between nodes in different communities (inter-community). 
+</span>
+
+```{r Edge Betweenness, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, eval=FALSE}
+# For convenience, this chunk is skipped while generating the report. Results are instead read from a GitHub repository.
+wiki_undirected = as.undirected(wiki, mode='collapse')
+actor_undirected = as.undirected(actors_g, mode='collapse')
+
+# Pre-processing the data by deleting the unconnected vertices (i.e. degree=0)
+wiki_noiso= delete.vertices(wiki, V(wiki)[degree(wiki)==0])
+actors_noiso= delete.vertices(actors_g, V(actors_g)[degree(actors_g)==0])
+
+# Walktrap community detection algorithm  
+
+# Wiki community detection code:
+wiki_comm_wt = walktrap.community(wiki_noiso, steps=200,modularity=TRUE)
+saveRDS(wiki_comm_wt,file = "/Users/Ashley/Documents/GitHub/Social-Network-Analysis-Course/wiki_comm_wt.rds")
+
+# Actors community detection code:
+actors_comm_wt = walktrap.community(actors_noiso, steps=200,modularity=TRUE)
+saveRDS(actors_comm_wt,file = "/Users/Ashley/Documents/GitHub/Social-Network-Analysis-Course/actors_comm_wt.rds")
+
+# Edge betweenness community detection (my R studio takes too much time to run the EB community algorithm so have not been able to save these to RDS - we can omit this since we have considered the Walktrap community above)
+wiki_comm_eb = edge.betweenness.community(wiki_noiso)
+actors_comm_eb = edge.betweenness.community(actor_noiso)
+```
+
+```{r Modularity, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+wiki_comm_wt = readRDS(gzcon(url("https://github.com/ashomah/Social-Network-Analysis-Course/raw/master/wiki_comm_wt.rds")))
+actors_comm_wt=readRDS(gzcon(url("https://github.com/ashomah/Social-Network-Analysis-Course/raw/master/actors_comm_wt.rds")))
+
+cat(paste("Modularity of Wikipedia community (Walktrap algorithm) :",round(igraph::modularity(wiki_comm_wt),2)),paste("Modularity of Actors community (Walktrap algorithm) :",round(igraph::modularity(actors_comm_wt),2)),sep='\n')
+```
+
+<span style="color:blue">
+We can plot the structures of the communities detected for each network as follows (where red edges show inter-community edges and black edges show intra-community edges).
+</span>
+
+```{r Community Plots, echo=FALSE, include=TRUE, fig.align='center', fig.height=5, fig.width=10, warning=FALSE}
+lw <- layout_nicely(wiki)
+la <- layout_nicely(actors_g)
+
+par(mfrow=c(1,2))
+plot(wiki_comm_wt, wiki, layout = lw, main= "Wiki Community Detection", vertex.label = '', vertex.size = 5, edge.width = .1, edge.arrow.size=0.3)
+plot(actors_comm_wt, actors_g, layout = la, main= "Actors Community Detection", vertex.label = '', vertex.size = 5, edge.width = .1)
+par(mfrow=c(1,1))
+```
+
+
+</br></br>
+
+***
+
+# Final project proposal
+Write a short proposal for your final project.
+
+<span style="color:blue">
+Our team plans to compare the respective networks of American Airlines, Delta Air Lines, and United Airlines. We have accessed a schedule dataset from Innovata Schedules, which lists all the flights scheduled in the calendar year of 2018 for each month. For each city pair, three metrics are given to establish the flight schedule: number of flights operated in the month, total number of seats available on the route for the whole month, and available seat miles (Total number of seats available * distance of the route flown).
+</span>
+
+<span style="color:blue">
+Network will be non-directional, as capacity dispatched by scheduled carriers is bi-directional and most customers buy round-trips. It will be weighted by the different capacity metrics detailed above. Our team will be able to examine which carrier has the most efficient network (Low average path length), which airline is best equipped if a particular hub is affected by weather events (Low centrality), and for large markets where all three carriers are competing, e.g. New York City or Los Angeles, establish which carrier is the most attractive for frequent flyers.
+</span>
+
+</br></br></br>
+
+***
+
+###### *Vratul Kapur | Irune Maury Arrue | Paul Jacques-Mignault | Sheena Miles | Ashley O'Mahony | Stavros Tsentemeidis | Karl Westphal*
+###### *O17 (Group G) | Master in Big Data and Business Analytics | Oct 2018 Intake | IE School of Human Sciences and Technology*
+
+</br></br>
