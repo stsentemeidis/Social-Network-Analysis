@@ -1,0 +1,1300 @@
+---
+title: "Social Network Analysis - Final Group Assignment"
+author: "MBD O17 (Group G): Vratul Kapur | Irune Maury Arrue | Paul Jacques-Mignault | Sheena Miles | Ashley O'Mahony | Stavros Tsentemeidis | Karl Westphal"
+date: "15/03/2019"
+output:
+  html_document:
+    df_print: paged
+    theme: yeti
+---
+***
+## Final project proposal
+<span style="color:blue">
+</span>
+
+Our team plans to compare the respective networks of **American Airlines**, **Delta Air Lines**, and **United Airlines**. 
+We have accessed a schedule dataset from *Innovata Schedules*, which lists all the flights scheduled in the calendar year of 2018 for each month. For each city pair, three metrics are given to establish the flight schedule: number of flights operated in the month, total number of seats available on the route for the whole month and available seat miles (Total number of seats available * distance of the route flown).
+
+Network will be **non-directional**, as capacity dispatched by scheduled carriers is bi-directional and most customers buy round-trips. It will be **weighted** by the different capacity metrics detailed above. Our team will be able to examine which carrier has the most efficient network *(Low average path length)*, which airline is best equipped if a particular hub is affected by weather events *(Low centrality)*, and for large markets where all three carriers are competing, e.g. New York City or Los Angeles, establish which carrier is the most attractive for frequent flyers.
+
+***
+
+```{r setup, include=FALSE}
+####################################################################################################################################
+####################################################################################################################################
+knitr::opts_chunk$set(echo = TRUE)
+
+# Packages to Import
+packages_list <- c('igraph',
+                   'stringr',
+                   'ggplot2',
+                   'gridExtra',
+                   'ggthemes',
+                   'kableExtra',
+                   'igraphdata',
+                   'plotly',
+                   'dplyr', 
+                   'cluster',
+                   'rlist',
+                   'geosphere'
+)
+
+
+for (i in packages_list){
+  if(!i%in%installed.packages()){
+    install.packages(i, dependencies = TRUE, repos = "http://cran.us.r-project.org")
+    library(i, character.only = TRUE)
+    print(paste0(i, ' has been installed'))
+  } else {
+    print(paste0(i, ' is already installed'))
+    library(i, character.only = TRUE)
+  }
+}
+####################################################################################################################################
+####################################################################################################################################
+```
+
+</br>
+
+## Data loading and preparation
+
+Aside from *loading* and *merging* the relevant datasets, this step included the creation of **3 graph objects** for each airline. One graph was unweighted, another graph had the carrier's total seat capacity as weights for each edge, and the third graph had the distances in statute miles between two cities as weights.
+
+The data includes all flights scheduled for American, Delta, and United, for the calendar year 2018, broken down by month. The monthly total for flights, seat capacity, and ASMs *(Available Seat Mile = Seat per route times Distance of the route)* are given for all scheduled routes.
+
+```{r dataprep, echo = FALSE, include = FALSE, warning=FALSE, message=FALSE}
+####################################################################################################################################
+####################################################################################################################################
+
+## Data Preparation
+
+www <- 'https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat'
+coordinates <- read.delim(www, header = FALSE, sep=",") 
+df1 <- coordinates[ ,c('V3','V4','V5','V7','V8')]
+names(df1) <- c('city','country','airport_code','latitude','longitude')
+
+df1$airport_label <- paste0(df1$city," (",df1$airport_code,")")
+
+www <- 'https://github.com/paul-jm/SocialNetworkAnalysis_Final/blob/master/2018_Sched_Data.csv?raw=true'
+df2 <- read.csv(www, header = TRUE, sep=",") 
+
+mrg <-  merge(df2, df1, by.x = 'Orig', by.y = 'airport_code',all.x = TRUE)
+mrg <- setNames(mrg,paste0(names(mrg),ifelse(names(mrg) %in% setdiff(names(df1),names(df2)),"_orig","")))
+
+mrg1 <-  merge(mrg, df1, by.x = 'Dest', by.y = 'airport_code',all.x = TRUE)
+mrg1 <- setNames(mrg1,paste0(names(mrg1),ifelse(names(mrg1) %in% setdiff(names(df1),names(mrg)),"_dest","")))
+mrg1$Distance <- mrg1$ASMs/mrg1$Seats
+
+kable(head(mrg1))%>%
+  kable_styling(bootstrap_options = "striped", font_size = 11)
+
+DL_Sched <- mrg1[which(mrg1$Mkt.Al == "DL"), ]
+AA_Sched <- mrg1[which(mrg1$Mkt.Al == "AA"), ]
+UA_Sched <- mrg1[which(mrg1$Mkt.Al == "UA"), ]
+
+DL_Sched$label <- paste0(DL_Sched$airport_label_orig," - ",DL_Sched$airport_label_dest)
+AA_Sched$label <- paste0(AA_Sched$airport_label_orig," - ",AA_Sched$airport_label_dest)
+UA_Sched$label <- paste0(UA_Sched$airport_label_orig," - ",UA_Sched$airport_label_dest)
+
+DL_Seats <- aggregate(DL_Sched$Seats, by=list(airport_code=DL_Sched$Orig), FUN=sum)
+names(DL_Seats) <- c('airport_code', 'Seats')
+AA_Seats <- aggregate(AA_Sched$Seats, by=list(airport_code=AA_Sched$Orig), FUN=sum)
+names(AA_Seats) <- c('airport_code', 'Seats')
+UA_Seats <- aggregate(UA_Sched$Seats, by=list(airport_code=UA_Sched$Orig), FUN=sum)
+names(UA_Seats) <- c('airport_code', 'Seats')
+
+DL_edges <- DL_Sched[ ,c('Dest','Orig','Flights','Seats','country_orig','country_dest','airport_label_orig', 
+                         'airport_label_dest','latitude_orig','longitude_orig','latitude_dest','longitude_dest','label')]
+DL_edges %>% distinct(label, .keep_all = TRUE)
+AA_edges <- AA_Sched[ ,c('Dest','Orig','Flights','Seats','country_orig','country_dest','airport_label_orig', 
+                         'airport_label_dest','latitude_orig','longitude_orig','latitude_dest','longitude_dest','label')]
+AA_edges %>% distinct(label, .keep_all = TRUE)
+UA_edges <- UA_Sched[ ,c('Dest','Orig','Flights','Seats','country_orig','country_dest','airport_label_orig', 
+                         'airport_label_dest','latitude_orig','longitude_orig','latitude_dest','longitude_dest','label')]
+UA_edges %>% distinct(label, .keep_all = TRUE)
+
+DL_edges_domestic <- DL_edges[(DL_edges$country_orig=='United States'&
+                                 DL_edges$country_dest=='United States'), ]
+AA_edges_domestic <- AA_edges[(AA_edges$country_orig=='United States'&
+                                 AA_edges$country_dest=='United States'), ]
+UA_edges_domestic <- UA_edges[(UA_edges$country_orig=='United States'&
+                                 UA_edges$country_dest=='United States'), ]
+
+UA_edges_domestic$id <- seq_len(nrow(UA_edges_domestic))
+AA_edges_domestic$id <- seq_len(nrow(AA_edges_domestic))
+DL_edges_domestic$id <- seq_len(nrow(DL_edges_domestic))
+
+DL_edges_international <- DL_edges[(DL_edges$country_orig!='United States'|
+                                      DL_edges$country_dest!='United States'), ]
+AA_edges_international <- AA_edges[(AA_edges$country_orig!='United States'|
+                                      AA_edges$country_dest!='United States'), ]
+UA_edges_international <- UA_edges[(UA_edges$country_orig!='United States'|
+                                      UA_edges$country_dest!='United States'), ]
+
+UA_edges_international$id <- seq_len(nrow(UA_edges_international))
+AA_edges_international$id <- seq_len(nrow(AA_edges_international))
+DL_edges_international$id <- seq_len(nrow(DL_edges_international))
+
+DL_nodes <- merge(DL_Seats, df1, by = "airport_code", all.x = TRUE)
+AA_nodes <- merge(AA_Seats, df1, by = "airport_code", all.x = TRUE)
+UA_nodes <- merge(UA_Seats, df1, by = "airport_code", all.x = TRUE)
+
+DL_nodes_domestic <- DL_nodes[(DL_nodes$country=='United States'), ]
+AA_nodes_domestic <- AA_nodes[(AA_nodes$country=='United States'), ]
+UA_nodes_domestic <- UA_nodes[(UA_nodes$country=='United States'), ]
+
+DL_nodes_int <- DL_nodes[DL_nodes$airport_code %in% unique(DL_edges_international$Orig), ]
+AA_nodes_int <- AA_nodes[AA_nodes$airport_code %in% unique(AA_edges_international$Orig), ]
+UA_nodes_int <- UA_nodes[UA_nodes$airport_code %in% unique(UA_edges_international$Orig), ]
+
+DL_Distance <- aggregate(DL_Sched$Distance, by=list(airport_code=DL_Sched$Orig), FUN=sum)
+names(DL_Distance) <- c('airport_code_1', 'Distance')
+DL_Distance$Distance_F <- round(1/sqrt(DL_Distance$Distance),3)
+AA_Distance <- aggregate(AA_Sched$Distance, by=list(airport_code=AA_Sched$Orig), FUN=sum)
+names(AA_Distance) <- c('airport_code_1', 'Distance')
+AA_Distance$Distance_F <- round(1/sqrt(AA_Distance$Distance),3)
+UA_Distance <- aggregate(UA_Sched$Distance, by=list(airport_code=UA_Sched$Orig), FUN=sum)
+names(UA_Distance) <- c('airport_code_1', 'Distance')
+UA_Distance$Distance_F <- round(1/sqrt(UA_Distance$Distance),3)
+
+DL_all <- cbind(DL_Seats,DL_Distance)
+DL_all$airport_code_1 <- NULL
+AA_all <- cbind(AA_Seats,AA_Distance)
+AA_all$airport_code_1 <- NULL
+UA_all <- cbind(UA_Seats,UA_Distance)
+UA_all$airport_code_1 <- NULL
+
+####################################################################################################################################
+####################################################################################################################################
+
+#Links with Seats as weigths 
+DL_links <- DL_Sched[,c('Dest','Orig')]
+AA_links <- AA_Sched[,c('Dest','Orig')]
+UA_links <- UA_Sched[,c('Dest','Orig')]
+
+DL_links_s <- DL_Sched[,c('Dest','Orig','Seats')]
+AA_links_s <- AA_Sched[,c('Dest','Orig','Seats')]
+UA_links_s <- UA_Sched[,c('Dest','Orig','Seats')]
+
+names(DL_links_s)[names(DL_links_s) == 'Seats'] <- 'weight'
+names(AA_links_s)[names(AA_links_s) == 'Seats'] <- 'weight'
+names(UA_links_s)[names(UA_links_s) == 'Seats'] <- 'weight'
+
+####################################################################################################################################
+####################################################################################################################################
+
+#Links with Distance as weigths 
+DL_links_d <- unique(DL_Sched[ ,c('Dest','Orig','Distance')])
+AA_links_d <- unique(AA_Sched[ ,c('Dest','Orig','Distance')])
+UA_links_d <- unique(UA_Sched[ ,c('Dest','Orig','Distance')])
+
+DL_links_d$Distance <- DL_links_d$Distance/2
+AA_links_d$Distance <- AA_links_d$Distance/2
+UA_links_d$Distance <- UA_links_d$Distance/2
+
+names(DL_links_d)[names(DL_links_d) == 'Distance'] <- 'weight'
+names(AA_links_d)[names(AA_links_d) == 'Distance'] <- 'weight'
+names(UA_links_d)[names(UA_links_d) == 'Distance'] <- 'weight'
+
+####################################################################################################################################
+####################################################################################################################################
+
+#Graphs without weights
+DL_g <- graph_from_data_frame(d=DL_links, vertices = DL_nodes, directed = FALSE)
+AA_g <- graph_from_data_frame(d=AA_links, vertices = NULL, directed = FALSE) 
+UA_g <- graph_from_data_frame(d=UA_links, vertices = UA_nodes, directed = FALSE)
+
+####################################################################################################################################
+####################################################################################################################################
+
+#Graphs by Seats
+DL_g_s <- graph_from_data_frame(d=DL_links_s, vertices = DL_nodes, directed = FALSE)
+AA_g_s <- graph_from_data_frame(d=AA_links_s, vertices = NULL, directed = FALSE) 
+UA_g_s <- graph_from_data_frame(d=UA_links_s, vertices = UA_nodes, directed = FALSE)
+
+####################################################################################################################################
+####################################################################################################################################
+
+#Graphs by Distance
+DL_g_d <- graph_from_data_frame(d=DL_links_d, vertices = DL_nodes, directed = FALSE)
+AA_g_d <- graph_from_data_frame(d=AA_links_d, vertices = NULL, directed = FALSE) 
+UA_g_d <- graph_from_data_frame(d=UA_links_d, vertices = UA_nodes, directed = FALSE)
+
+####################################################################################################################################
+####################################################################################################################################
+
+# Color Palette
+color1 = 'black'
+color2 = 'white'
+color3 = 'red2' #Delta
+color4 = 'darkorchid3'
+color5 = 'deepskyblue3' #American
+color6 = 'goldenrod1' #United
+font1 = 'Impact'
+font2 = 'Helvetica'
+####################################################################################################################################
+####################################################################################################################################
+```
+
+</br>
+
+```{r head, echo = FALSE, include = TRUE, warning=FALSE, message=FALSE}
+kable(head(mrg1))%>%
+  kable_styling(bootstrap_options = "striped", font_size = 11)%>%
+  scroll_box(width = "100%", height = "400px")
+```
+
+</br>
+
+## Mapping Presentation
+
+All airlines' networks are represented on the following **maps**. For the sake of readability, each airlines' network was represented on different map; one for **domestic flights**, and one for the **international flights**. The user can hover over a node for further detail regarding the city's name and the IATA airport code. 
+
+```{r mapping, echo=FALSE, warning=FALSE, message=FALSE}
+####################################################################################################################################
+####################################################################################################################################
+
+# map projection
+geo <- list(
+  scope = 'north america',
+  projection = list(type = 'cylindrical'),
+  showland = TRUE,
+  showcountries = TRUE,
+  bgcolor = toRGB('Black'),
+  landcolor = toRGB("Black"),
+  countrycolor = toRGB("gray30")
+)
+
+map_aa_dom <- plot_geo(locationmode = 'USA-States', color = I("deepskyblue3")) %>%
+  add_markers(
+    data = AA_nodes_domestic, x = ~longitude, y = ~latitude,
+    size = ~Seats, text = ~airport_label, hoverinfo="text",alpha = 0.7, marker=list(sizeref=0.5, sizemode="area") 
+  ) %>%
+  add_segments(
+    data = group_by(AA_edges_domestic, id),
+    x = ~longitude_orig, xend = ~longitude_dest,
+    y = ~latitude_orig, yend = ~latitude_dest,
+    alpha = 0.5, size = I(0.5), text = NULL, hoverinfo = 'text'
+  ) %>%
+  layout(
+    title = 'American Airlines Domestic Network',
+    geo = geo,showlegend = FALSE
+  )
+
+####################################################################################################################################
+####################################################################################################################################
+
+map_dl_dom <- plot_geo(locationmode = 'USA-States', color = I("red2")) %>%
+  add_markers(
+    data = DL_nodes_domestic, x = ~longitude, y = ~latitude,
+    size = ~Seats, text = ~airport_label, hoverinfo="text",alpha = 0.7, marker=list(sizeref=0.5, sizemode="area") 
+  ) %>%
+  add_segments(
+    data = group_by(DL_edges_domestic, id),
+    x = ~longitude_orig, xend = ~longitude_dest,
+    y = ~latitude_orig, yend = ~latitude_dest,
+    alpha = 0.5, size = I(0.5), text = NULL, hoverinfo = 'text'
+  ) %>%
+  layout(
+    title = 'Delta Air Lines Domestic Network',
+    geo = geo,showlegend = FALSE
+  )
+
+####################################################################################################################################
+####################################################################################################################################
+
+map_ua_dom <- plot_geo(locationmode = 'USA-States', color = I("goldenrod1")) %>%
+  add_markers(
+    data = UA_nodes_domestic, x = ~longitude, y = ~latitude,
+    size = ~Seats, text = ~airport_label, hoverinfo="text",alpha = 0.7, marker=list(sizeref=0.5, sizemode="area") 
+  ) %>%
+  add_segments(
+    data = group_by(UA_edges_domestic, id),
+    x = ~longitude_orig, xend = ~longitude_dest,
+    y = ~latitude_orig, yend = ~latitude_dest,
+    alpha = 0.5, size = I(0.5), text = NULL, hoverinfo = 'text'
+  ) %>%
+  layout(
+    title = 'United Airlines Domestic Network',
+    geo = geo,showlegend = FALSE
+  )
+
+####################################################################################################################################
+####################################################################################################################################
+
+geo_int <- list(
+  scope = 'world',
+  projection = list(type = 'cylindrical'),
+  showland = TRUE,
+  showcountries = TRUE,
+  bgcolor = toRGB('Black'),
+  landcolor = toRGB("Black"),
+  countrycolor = toRGB("gray30")
+)
+
+####################################################################################################################################
+####################################################################################################################################
+
+map_aa_int <- plot_geo(locationmode = 'world', color = I("deepskyblue3")) %>%
+  add_markers(
+    data = AA_nodes_int, x = ~longitude, y = ~latitude,
+    size = ~Seats, text = ~airport_label, hoverinfo="text",alpha = 0.7, marker=list(sizeref=0.5, sizemode="area") 
+  ) %>%
+  add_segments(
+    data = group_by(AA_edges_international, id),
+    x = ~longitude_orig, xend = ~longitude_dest,
+    y = ~latitude_orig, yend = ~latitude_dest,
+    alpha = 0.5, size = I(0.5), text = NULL, hoverinfo = 'text'
+  ) %>%
+  layout(
+    title = 'American Airlines Airlines Global Network',
+    geo = geo_int,showlegend = FALSE
+  )
+
+####################################################################################################################################
+####################################################################################################################################
+
+map_ua_int <- plot_geo(locationmode = 'world', color = I("goldenrod1")) %>%
+  add_markers(
+    data = UA_nodes_int, x = ~longitude, y = ~latitude,
+    size = ~Seats, text = ~airport_label, hoverinfo="text",alpha = 0.7, marker=list(sizeref=0.5, sizemode="area") 
+  ) %>%
+  add_segments(
+    data = group_by(UA_edges_international, id),
+    x = ~longitude_orig, xend = ~longitude_dest,
+    y = ~latitude_orig, yend = ~latitude_dest,
+    alpha = 0.5, size = I(0.5), text = NULL, hoverinfo = 'text'
+  ) %>%
+  layout(
+    title = 'United Airlines Global Network',
+    geo = geo_int,showlegend = FALSE
+  )
+
+####################################################################################################################################
+####################################################################################################################################
+
+map_dl_int <- plot_geo(locationmode = 'world', color = I("red2")) %>%
+  add_markers(
+    data = DL_nodes_int, x = ~longitude, y = ~latitude,
+    size = ~Seats, text = ~airport_label, hoverinfo="text",alpha = 0.7, 
+    marker=list(sizeref=0.5, sizemode="area")
+  ) %>%
+  add_segments(
+    data = group_by(DL_edges_international, id),
+    x = ~longitude_orig, xend = ~longitude_dest,
+    y = ~latitude_orig, yend = ~latitude_dest,
+    alpha = 0.5, size = I(0.5), text = NULL, hoverinfo = 'text'
+  ) %>%
+  layout(
+    title = 'Delta Air Lines Air Lines Global Network',
+    geo = geo_int,showlegend = FALSE
+  )
+
+# Create a shareable link to your chart
+# Set up API credentials: https://plot.ly/r/getting-started
+# chart_link = api_create(p, filename="UA-map-flights")
+# chart_link
+####################################################################################################################################
+####################################################################################################################################
+```
+
+</br>
+
+```{r presentation, echo=FALSE, warning=FALSE, message=FALSE,fig.width = 10}
+
+map_aa_dom
+map_aa_int
+
+map_ua_dom
+map_ua_int
+
+map_dl_dom
+map_dl_int
+
+```
+
+</br>
+
+## Degree Distribution
+
+The present analysis will be carried out assuming the carriers' networks are **non-directional**. Airlines dispatch capacity in both directions; most customers also purchase return tickets as opposed to one way. Both capacity and passenger traffic patterns are bi-directional. 
+
+As with most networks, our three airline networks have a **right-skewed degree distribution**, implying few airports, i.e. the airlines' hubs, are linked to many destinations across the world. Many more airports in the networks, are only linked to a few other nodes; typically the large hubs. In aviation, such airports are referred to as **spokes**. Delta, American, and United, all have adopted a 'hub & spoke' model, and thus present comparable degree distribution. 
+
+Delta's operations very much revolve its **Atlanta hub (ATL)**. Delta's other hubs; **New York (JFK)**, **Detroit (DTW)**, and **Minneapolis (MSP)** are smaller platforms. This can be seen on the histogram below, where the further right on the x-axis, the fewer lines there are. American follows the same pattern, where Dallas/Fort Worth is linked directly to more nodes than any other hub. **Charlotte (CLT)** and **Chicago (ORD)** boast smaller operations, though are still part of the 'long tail'. Finally, United Airlines follows the same pattern, though exacerbated. **Chicago (ORD)** is its largest hub by degree, while other hubs, i.e. **Houston (IAH)**, **Newark (EWR)**, look smaller in comparison. 
+
+</br>
+
+```{r degree_distribution, echo=FALSE, warning=FALSE, message=FALSE}
+####################################################################################################################################
+####################################################################################################################################
+
+deg_all_DL <- igraph::degree(DL_g, mode="total")
+mean_DL <- round(mean(deg_all_DL),2)
+sd_DL <- round(sd(deg_all_DL),2)
+basics1 <- rbind('Mean of the Degree Distribution for Delta Air Lines',round(mean_DL,2),'Sd of the Degree Distribution for Delta Air  Lines',round(sd_DL,2))
+# kable(basics1)%>%
+#   kable_styling(bootstrap_options = "striped", font_size = 9, full_width = F, position = "left")
+
+####################################################################################################################################
+####################################################################################################################################
+
+deg_all_AA <- igraph::degree(AA_g, mode="total")
+mean_AA <- round(mean(deg_all_AA),2)
+sd_AA <- round(sd(deg_all_AA),2)
+basics2 <- rbind('Mean of the Degree Distribution for American Airlines',round(mean_AA,2),'Sd of the Degree Distribution for American Airlines',round(sd_AA,2))
+# kable(basics2)%>%
+#   kable_styling(bootstrap_options = "striped", font_size = 9, full_width = F, position = "left")
+
+####################################################################################################################################
+####################################################################################################################################
+
+deg_all_UA <- igraph::degree(UA_g, mode="total")
+mean_UA <- round(mean(deg_all_UA),2)
+sd_UA <- round(sd(deg_all_UA),2)
+basics3 <- rbind('Mean of the Degree Distribution for United Airlines',round(mean_UA,2),'Sd of the Degree Distribution for United Airlines',round(sd_UA,2))
+# kable(basics3)%>%
+#   kable_styling(bootstrap_options = "striped", font_size = 9, full_width = F, position = "left")
+
+
+result_basics <- cbind(basics1, basics2, basics3)
+kable(result_basics)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 12, full_width = T, position = "center")
+```
+
+</br>
+
+```{r degree_distribution_graphs, echo=FALSE, warning=FALSE, message=FALSE, fig.align='center', fig.width = 10}
+####################################################################################################################################
+####################################################################################################################################
+
+dgDL <- qplot(deg_all_DL,
+            geom="histogram",
+            binwidth = 1,  
+            main = "Degree Distribution for DL", 
+            xlab = "Degree",  
+            fill=I(color3))+
+  theme_tufte(ticks=F)+
+  xlim(0, 300)+
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(color = color2, family = font2),
+        plot.background = element_rect(fill = color1, color = color1),
+        title = element_text(colour = color2, family = font2))
+####################################################################################################################################
+####################################################################################################################################
+#dgDL
+
+dgAA <- qplot(deg_all_AA,
+              geom="histogram",
+              binwidth = 1,  
+              main = "Degree Distribution for AA", 
+              xlab = "Degree",  
+              fill=I(color5))+
+  theme_tufte(ticks=F)+
+  xlim(0, 300)+
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(color = color2, family = font2),
+        plot.background = element_rect(fill = color1, color = color1),
+        title = element_text(colour = color2, family = font2))
+####################################################################################################################################
+####################################################################################################################################
+#dgAA
+
+dgUA <- qplot(deg_all_UA,
+              geom="histogram",
+              binwidth = 1,  
+              main = "Degree Distribution for UA", 
+              xlab = "Degree",  
+              fill=I(color6))+
+  theme_tufte(ticks=F)+
+  xlim(0, 300)+
+  theme(axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(color = color2, family = font2),
+        plot.background = element_rect(fill = color1, color = color1),
+        title = element_text(colour = color2, family = font2))
+####################################################################################################################################
+####################################################################################################################################
+#dgUA
+
+plot_all <- list()
+plot_all[[1]] <- dgDL
+plot_all[[2]] <- dgAA
+plot_all[[3]] <- dgUA
+
+grid.arrange(grobs = plot_all,
+             nrow = 1,
+             ncol = 3)
+
+#The degree of a node is the number of neighbours of the node. Undirected network nodes have only one degree.
+#In most real networks, like in our three datasets, the degree distribution is highly **asymmetric** (or skewed). 
+#Most of the nodes have low degrees, while a small but significant fraction of nodes have an extremely high degree.
+#Analysis of mean and variance between the three airlines
+
+####################################################################################################################################
+####################################################################################################################################
+```
+
+</br>
+
+## Network Diameter and Average Path Length 
+
+To compare networks between airlines, the network diameter can be considered. **American airlines** has a network diameter of **3**; implying 3 edges are needed to unite the most distant vertices in the network. This equates to 2 airport connections to reach the final destination. The most **distance vertices** are Allentown (ABE) and Lansing (LAN); this itinerary requires two connections. Allentown is only linked on American to Philadelphia (PHL), and Charlotte (CLT), whereas Lansing is linked to Chicago (ORD) and Washington DC (DCA). This implies any passenger going from ABE to LAN will have to connect in two hubs. American's network may have other pairs of nodes just as far apart, though the data is stored in alphabetical order, so ABE comes out on top. 
+
+**Delta's** longest path is from Aberdeen, South Dakota (ABR) to Guam (GUM). The path travels through **4** edges; passengers need to connect at 3 airports to reach their final destination. Delta operates an international hub at Tokyo Narita (NRT), from which the carrier serves destinations in the U.S. and Northeast Asia. ABR is only served from Minneapolis (MSP); MSP is served from Tokyo, though only from Haneda airport (HND). As the two Tokyo airports are seen as distinct nodes, passengers cannot connect between different airports. The itinerary from GUM to ABR includes connections in NRT, a US hub with nonstop service to both MSP and NRT, e.g. Seattle (SEA), Detroit (DTW), Atlanta (ATL), Portland (PDX), or Honolulu (HNL); the last connection is MSP.
+
+**United Airlines** has a small base in the Pacific Ocean to serve the island of Guam (GUM), and flies narrow body aircraft to other Pacific Islands and East Asia. The closest point to the Continental U.S. served nonstop from GUM is Honolulu (HNL). In this case, the two most distant vertices are Pohnpei Island (PNI) near Guam, and ABE, which requires **5** edges or 4 airport connections. One traveller would need to go through: Chuuk (TKK) near Guam*, GUM, Honolulu (HNL), and Chicago (ORD).
+
+*Stopovers where the passenger stays on the same plane are treated as a regularconnnection.
+
+```{r metrics, echo = FALSE, warning=FALSE, message=FALSE}
+####################################################################################################################################
+####################################################################################################################################
+
+#Comparison of all networks diameters and the average path length of each to determine
+#which one has the most efficient network (Low average path length). 
+#Considering the graphs as unweighted.
+
+#Diameters
+diam_DL <- diameter(DL_g, directed=F, weights=NA)
+diam_AA <- diameter(AA_g, directed=F, weights=NA)
+diam_UA <- diameter(UA_g, directed=F, weights=NA)
+result <- rbind('Network Diameter for Delta Air Lines',diam_DL,'Network Diameter for American Airlines', diam_AA,'Network Diameter for United Airlines', diam_UA)
+# kable(result)%>%
+#   kable_styling(bootstrap_options = "striped", font_size = 9, full_width = F, position = "left")
+
+#farthest_vertices(DL_g)
+#farthest_vertices(AA_g)
+#farthest_vertices(UA_g)
+
+#Another measure for the structure of a graph is its **diameter**. The diameter is an index measuring the extent of a graph 
+#by counting the number of edges in the shortest path between the most distant vertices.
+
+####################################################################################################################################
+####################################################################################################################################
+
+# Average Path Lengths
+avg_path_DL <- mean_distance(DL_g, directed=F)
+avg_path_AA <- mean_distance(AA_g, directed=F)
+avg_path_UA <- mean_distance(UA_g, directed=F)
+result2 <- rbind('Average Path Length Delta Air Lines',round(avg_path_DL,2),'Average Path Length for American Airlines', round(avg_path_AA,2),'Average Path Length for United Airlines', round(avg_path_UA,2))
+# kable(result2)%>%
+#   kable_styling(bootstrap_options = "striped", font_size = 9, full_width = F, position = "left")
+
+#The mean path length is the average of the shortest path length, averaged over all pairs of nodes. 
+#So, we take sum of all shortest paths between all vertices and divide number of all possible paths.
+
+result_total <- cbind(result, result2)
+kable(result_total)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 12, full_width = T, position = "center")
+####################################################################################################################################
+####################################################################################################################################
+```
+
+</br>
+
+## Comparison of the global clustering coefficient and the average local clustering coefficient of all airlines networks. 
+
+For all three carriers, **global network connectivity is rather low**. This implies that though nodes are linked to the airlines' main hubs, they are not linked to another. This intuitively makes business sense; the carriers operate a 'hub & spoke' model, where passengers connect through the large hubs to reach their final destination, rather than having a nonstop flight between two spokes with a 'point-to-point' model. Also, airlines typically try to minimize duplication between hubs, in an effort not to cannibalize connnecting passengers. As such, global transitivity for all 3 airlines is 0.1 or below. 
+
+By contrast, the carriers' **average local transitivities are rather high**. This implies that for any given node, the node's neighbour are connected to one another. Once again, this is consistent with the 'hub & spoke' model. If an airport is connected to 2 hubs, say Atlanta (ATL) and Detroit (DTW), those 2 hubs are very likely to be connected with one another as they are both hubs. All average local transitivities for all airlines is 0.9 or above. 
+
+As the networks are **undirected**, their reciprovity is 1, as shown below. This is consistent with airlines' business models of consistently dispatching capacity in both directions of a route. 
+
+```{r metrics_2, echo = FALSE, warning=FALSE, message=FALSE}
+####################################################################################################################################
+####################################################################################################################################
+
+#### Global Transitivities
+transitivity_DL <- transitivity(DL_g, type="undirected",weights=NA) 
+transitivity_AA <- transitivity(AA_g, type="undirected",weights=NA)
+transitivity_UA <- transitivity(UA_g, type="undirected",weights=NA)
+result3 <- rbind('Global Transitivity for Delta Air Lines',round(transitivity_DL,2),'Global Transitivity for American Airlines', round(transitivity_AA,2),'Global Transitivity for United Airlines', round(transitivity_UA,2))
+# kable(result3)%>%
+#   kable_styling(bootstrap_options = "striped", font_size = 9, full_width = F, position = "left")
+
+####################################################################################################################################
+####################################################################################################################################
+
+#### Local Transitivities
+transitivity_local_DL <- transitivity(DL_g, type="average",weights=NA) 
+transitivity_local_AA <- transitivity(AA_g, type="average",weights=NA)
+transitivity_local_UA <- transitivity(UA_g, type="average",weights=NA)
+result4 <- rbind('Average Local Transitivity for Delta Air Lines',round(transitivity_local_DL,2),'Average Local Transitivity for American Airlines', round(transitivity_local_AA,2),'Average Local Transitivity for United Airlines', round(transitivity_local_UA,2))
+# kable(result4)%>%
+#   kable_styling(bootstrap_options = "striped", font_size = 9, full_width = F, position = "left")
+
+#In graph theory, a **clustering coefficient** is a value of degree at which nodes tend to cluster together.
+#Two versions of this measure exist: the **global** and the **local**. 
+#The global version was designed to give an overall indication of the clustering in the network, 
+#whereas the local gives an indication of the embeddedness of single nodes.
+
+#Global clustering coefficient*
+#The global clustering coefficient is based on triplets of nodes (three nodes connected to each others). 
+#The global clustering coefficient is the number of closed triplets (or 3 x triangles) over the total number 
+#of triplets (both open and closed). This measure gives an indication of the clustering 
+#in the whole network (global), and can be applied to both undirected and directed networks.
+
+#Local clustering coefficient*
+#The local clustering of each node in a graph, is the fraction of triangles that actually exist over all 
+#possible triangles in its neighborhood. The average clustering coefficient of a graph is the mean of local clusterings.
+
+####################################################################################################################################
+####################################################################################################################################
+
+#Reciprocity
+DL_re <- reciprocity(DL_g)
+AA_re <- reciprocity(AA_g)
+UA_re <- reciprocity(UA_g)
+result5 <- rbind('Reciprocity for Delta Air Lines',DL_re,'Reciprocity for American Airlines',AA_re,'Reciprocity for United Airlines',UA_re)
+# kable(result5)%>%
+#   kable_styling(bootstrap_options = "striped", font_size = 9, full_width = F, position = "left")
+
+resuult_total <- cbind(result3, result4, result5)
+kable(resuult_total)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 12, full_width = T, position = "center")
+####################################################################################################################################
+####################################################################################################################################
+```
+
+ </br>
+ 
+## Node importance: Centrality measures
+
+Each carrier's network includes a number of hubs, used to distribute connecting passengers through to their final destination. The said hubs can be ranked by different attributes; **degree**, **the number of nodes** they are directly linked to; **betweenness**, which measures how many, of all the shortest paths between 2 given points run through the hub; and **closeness**, which measures how close the hub is to all the other cities. For this part of the analysis, the edges will be unweighted to properly assess each hub's connectivity to destinations across the world.
+
+**Delta's biggest hubs are all in the Top 10 for degree centrality**. Boston (BOS) and Cincinnati (CVG) are smaller in comparison and occupy ranks 9 and 10 respectively. When Delta's hubs are ranked by betweenness, Tokyo Narita (NRT) and Honolulu (HNL) show up in the Top 10. Those 2 airports are served directly to remote locations in the Pacific, like Guam, or markets in Southeast Asia that Delta cannot reach nonstop from the U.S. with its current fleet. Singapore (SIN) is an example. When looking at hubs' rankings by closeness, New York LaGuardia (LGA) is not in the Delta's Top 10 hubs. This makes business sense, since LGA is a specialized market aimed at business travelers; runway and perimeter constraints means it can only be served from nearby cities. Rather than serving LGA from the rest of the world, like New York (JFK), LGA is served from domestic markets, resulting in longer paths to reach extreme nodes of the network. 
+
+**American's network is more consistent**. The same 10 hubs are among the rankings for degree, betweenness, and closeness. Dallas/Forth Worth, Charlotte (CLT), Miami (MIA), Philadelphia (PHL), and Chicago O'Hare (ORD) are consistently among the best-connected hubs. 
+
+In **United's networks, 3 hubs consistently come out on top for degree, betweenness, and closeness** ; Chicago (ORD), Houston (IAH), and Newark (EWR). The carrier boasts 7 major hubs, and the three last airports in the Top 10 for degree are much smaller in comparison. Cleveland (CLE), Guam (GUM), and Honolulu (HNL) can hardly be considered as 'hubs', at least when looking at degree centrality. However, GUM gains in importance in the betweenness ranking. The airport is linked directly to several remote points in the Pacific Islands; several unique paths connect through GUM to reach extreme points of the network. Since it is linked to remote Pacific Islands and Hawaii, GUM did not make it to the Top 10 hubs by closeness. Paths to the U.S. mainland would be very long. Though it is not in the Top 10 hubs for degree, HNL is in the top 10 for both betweenness and closeness. Though HNL is not linked directly to several nodes, like ORD or IAH, it is linked to the U.S. Mainland, Northeast Asia, and remote islands in the Pacific. HNL is thus at the center of many long paths, and makes it to the Top 10 for betweenness and closeness.  
+
+```{r centrality_measures, echo=FALSE, warning=FALSE, message=FALSE}
+####################################################################################################################################
+####################################################################################################################################
+
+#Which airline is best equipped if a particular hub is affected by weather events (Low centrality)
+
+#For each airline, the following vectors contain the degree, betweeness and closeness for each vertex of the graph.
+#Delta Airlines
+DL_dg = igraph::degree(DL_g)
+DL_bt = igraph::betweenness(DL_g, directed = FALSE)
+DL_cl = igraph::closeness(DL_g)
+
+#### Degree Vector
+#head(DL_dg,12)
+
+#### Betweenness Vector
+#head(DL_bt,12)
+
+#### Closeness Vector
+#head(DL_cl,12)
+
+####################################################################################################################################
+####################################################################################################################################
+
+#### Top 10 Degree Centrality for Delta Airlines Network
+top_10_dg <- head(sort(DL_dg, decreasing = TRUE) ,10)
+top_10_dg_df <- data.frame(name = names(top_10_dg), degree = top_10_dg)
+top_10_dg_bt <- DL_bt[names(DL_bt) %in% names(top_10_dg)]
+top_10_dg_cl <- DL_cl[names(DL_cl) %in% names(top_10_dg)]
+top_10_dg_edges <- DL_nodes[DL_nodes$airport_code %in% names(top_10_dg),]
+
+top_10_dg_df$betweenness <- top_10_dg_bt[match(top_10_dg_df$name, names(top_10_dg_bt))]
+top_10_dg_df$closeness <- top_10_dg_cl[match(top_10_dg_df$name, names(top_10_dg_cl))]
+top_10_dg_DL <- merge(x = top_10_dg_df, y = top_10_dg_edges, by.x = 'name', by.y = 'airport_code')
+top_10_dg_DL$id <- NULL
+
+top_10_dg_DL <- top_10_dg_DL[order(top_10_dg_DL$degree, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "Seats", "city", "country")]
+remove(list = c('top_10_dg', 'top_10_dg_bt', 'top_10_dg_cl', 'top_10_dg_df', 'top_10_dg_edges'))
+names(top_10_dg_DL)[5]<-"Seats"
+kable(top_10_dg_DL)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 9)%>%
+  add_header_above(c( "Delta Airlines Nodes Ranked by Degree" = 8))
+
+#American Airlines
+AA_dg = igraph::degree(AA_g)
+AA_bt = igraph::betweenness(AA_g, directed = FALSE)
+AA_cl = igraph::closeness(AA_g)
+
+#### Degree Vector
+#head(AA_dg,12)
+
+#### Betweenness Vector
+#head(AA_bt,12)
+
+#### Closeness Vector
+#head(AA_cl,12)
+
+####################################################################################################################################
+####################################################################################################################################
+
+#### Top 10 Degree Centrality for American Airlines Network
+top_10_dg <- head(sort(AA_dg, decreasing = TRUE) ,10)
+top_10_dg_df <- data.frame(name = names(top_10_dg), degree = top_10_dg)
+top_10_dg_bt <- AA_bt[names(AA_bt) %in% names(top_10_dg)]
+top_10_dg_cl <- AA_cl[names(AA_cl) %in% names(top_10_dg)]
+top_10_dg_edges <- AA_nodes[AA_nodes$airport_code %in% names(top_10_dg),]
+
+top_10_dg_df$betweenness <- top_10_dg_bt[match(top_10_dg_df$name, names(top_10_dg_bt))]
+top_10_dg_df$closeness <- top_10_dg_cl[match(top_10_dg_df$name, names(top_10_dg_cl))]
+top_10_dg_AA <- merge(x = top_10_dg_df, y = top_10_dg_edges, by.x = 'name', by.y = 'airport_code')
+top_10_dg_AA$id <- NULL
+#top_10_dg_AA
+
+top_10_dg_AA <- top_10_dg_AA[order(top_10_dg_AA$degree, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "Seats", "city", "country")]
+remove(list = c('top_10_dg', 'top_10_dg_bt', 'top_10_dg_cl', 'top_10_dg_df', 'top_10_dg_edges'))
+names(top_10_dg_AA)[5]<-"Seats"
+kable(top_10_dg_AA)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 9)%>%
+  add_header_above(c( "American Airlines Nodes Ranked by Degree" = 8))
+
+####################################################################################################################################
+####################################################################################################################################
+
+#United Airlines
+UA_dg = igraph::degree(UA_g)
+UA_bt = igraph::betweenness(UA_g, directed = FALSE)
+UA_cl = igraph::closeness(UA_g)
+
+#### Degree Vector
+#head(UA_dg,12)
+
+#### Betweenness Vector
+#head(UA_bt,12)
+
+#### Closeness Vector
+#head(UA_cl,12)
+
+#### Top 10 Degree Centrality for United Airlines Network
+top_10_dg <- head(sort(UA_dg, decreasing = TRUE) ,10)
+top_10_dg_df <- data.frame(name = names(top_10_dg), degree = top_10_dg)
+top_10_dg_bt <- UA_bt[names(UA_bt) %in% names(top_10_dg)]
+top_10_dg_cl <- UA_cl[names(UA_cl) %in% names(top_10_dg)]
+top_10_dg_edges <- UA_nodes[UA_nodes$airport_code %in% names(top_10_dg),]
+
+top_10_dg_df$betweenness <- top_10_dg_bt[match(top_10_dg_df$name, names(top_10_dg_bt))]
+top_10_dg_df$closeness <- top_10_dg_cl[match(top_10_dg_df$name, names(top_10_dg_cl))]
+top_10_dg_UA <- merge(x = top_10_dg_df, y = top_10_dg_edges, by.x = 'name', by.y = 'airport_code')
+top_10_dg_UA$id <- NULL
+#top_10_dg_UA
+
+top_10_dg_UA <- top_10_dg_UA[order(top_10_dg_UA$degree, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "Seats", "city", "country")]
+remove(list = c('top_10_dg', 'top_10_dg_bt', 'top_10_dg_cl', 'top_10_dg_df', 'top_10_dg_edges'))
+names(top_10_dg_UA)[5]<-"Seats"
+kable(top_10_dg_UA)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 9)%>%
+  add_header_above(c( "United Airlines Nodes Ranked by Degree" = 8))
+
+
+#First, it is important to understand that all subsets are undirected. For this particular case, 
+#the measurement of Degree Centrality returns the central nodes which are those that have most links 
+#with other nodes. 
+
+#Is this list similar to the one obtained for degree centrality? Why? 
+#How do you explain the high betweenness of the top-10 list?
+
+####################################################################################################################################
+####################################################################################################################################
+
+#### Top 10 Betweenness Centrality for Delta Airlines
+top_10_bt <- head(sort(DL_bt, decreasing = TRUE) ,10)
+top_10_bt_df <- data.frame(name = names(top_10_bt), betweenness = top_10_bt)
+top_10_bt_dg <- DL_dg[names(DL_dg) %in% names(top_10_bt)]
+top_10_bt_cl <- DL_cl[names(DL_cl) %in% names(top_10_bt)]
+top_10_bt_edges <- DL_nodes[DL_nodes$airport_code %in% names(top_10_bt),]
+
+top_10_bt_df$degree <- top_10_bt_dg[match(top_10_bt_df$name, names(top_10_bt_dg))]
+top_10_bt_df$closeness <- top_10_bt_cl[match(top_10_bt_df$name, names(top_10_bt_cl))]
+top_10_bt_DL <- merge(x = top_10_bt_df, y = top_10_bt_edges, by.x = 'name', by.y = 'airport_code')
+top_10_bt_DL$id <- NULL
+#top_10_bt_DL
+
+top_10_bt_DL <- top_10_bt_DL[order(top_10_bt_DL$betweenness, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "Seats", "city", "country")]
+remove(list = c('top_10_bt', 'top_10_bt_dg', 'top_10_bt_cl', 'top_10_bt_df', 'top_10_bt_edges'))
+names(top_10_bt_DL)[5]<-"Seats"
+kable(top_10_bt_DL)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 9)%>%
+  add_header_above(c( "Delta Airlines Nodes Ranked by Betweenness Centrality" = 8))
+
+####################################################################################################################################
+####################################################################################################################################
+
+#### Top 10 Betweenness Centrality for American Airlines
+top_10_bt <- head(sort(AA_bt, decreasing = TRUE) ,10)
+top_10_bt_df <- data.frame(name = names(top_10_bt), betweenness = top_10_bt)
+top_10_bt_dg <- AA_dg[names(AA_dg) %in% names(top_10_bt)]
+top_10_bt_cl <- AA_cl[names(AA_cl) %in% names(top_10_bt)]
+top_10_bt_edges <- AA_nodes[AA_nodes$airport_code %in% names(top_10_bt),]
+
+top_10_bt_df$degree <- top_10_bt_dg[match(top_10_bt_df$name, names(top_10_bt_dg))]
+top_10_bt_df$closeness <- top_10_bt_cl[match(top_10_bt_df$name, names(top_10_bt_cl))]
+top_10_bt_AA <- merge(x = top_10_bt_df, y = top_10_bt_edges, by.x = 'name', by.y = 'airport_code')
+top_10_bt_AA$id <- NULL
+#top_10_bt_AA
+
+top_10_bt_AA <- top_10_bt_AA[order(top_10_bt_AA$betweenness, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "Seats", "city", "country")]
+remove(list = c('top_10_bt', 'top_10_bt_dg', 'top_10_bt_cl', 'top_10_bt_df', 'top_10_bt_edges'))
+names(top_10_bt_AA)[5]<-"Seats"
+kable(top_10_bt_AA)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 9)%>%
+  add_header_above(c( "American Airlines Nodes Ranked by Betweenness Centrality" = 8))
+
+####################################################################################################################################
+####################################################################################################################################
+
+#### Top 10 Betweenness Centrality for United Airlines
+top_10_bt <- head(sort(UA_bt, decreasing = TRUE) ,10)
+top_10_bt_df <- data.frame(name = names(top_10_bt), betweenness = top_10_bt)
+top_10_bt_dg <- UA_dg[names(UA_dg) %in% names(top_10_bt)]
+top_10_bt_cl <- UA_cl[names(UA_cl) %in% names(top_10_bt)]
+top_10_bt_edges <- UA_nodes[UA_nodes$airport_code %in% names(top_10_bt),]
+
+top_10_bt_df$degree <- top_10_bt_dg[match(top_10_bt_df$name, names(top_10_bt_dg))]
+top_10_bt_df$closeness <- top_10_bt_cl[match(top_10_bt_df$name, names(top_10_bt_cl))]
+top_10_bt_UA <- merge(x = top_10_bt_df, y = top_10_bt_edges, by.x = 'name', by.y = 'airport_code')
+top_10_bt_UA$id <- NULL
+#top_10_bt_UA
+
+top_10_bt_UA <- top_10_bt_UA[order(top_10_bt_UA$betweenness, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "Seats", "city", "country")]
+remove(list = c('top_10_bt', 'top_10_bt_dg', 'top_10_bt_cl', 'top_10_bt_df', 'top_10_bt_edges'))
+names(top_10_bt_UA)[5]<-"Seats"
+kable(top_10_bt_UA)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 9)%>%
+  add_header_above(c( "United Airlines Nodes Ranked by Betweenness Centrality" = 8))
+
+#The Beetweenness Centrality measures how many shortest paths going through a node. 
+#It highlights how important a node is to link other nodes to each others.
+#It is interesting to note that this centrality is not necessarily related to the Degree Centrality.
+
+#Is this list similar to the one obtained for degree and betweenness centralities? Why? 
+#How do you explain the high closeness of the top-20 list?
+
+####################################################################################################################################
+####################################################################################################################################
+
+#### Top 10 Closeness Centrality for Delta Airlines
+top_10_cl <- head(sort(DL_cl, decreasing = TRUE) ,10)
+top_10_cl_df <- data.frame(name = names(top_10_cl), closeness = top_10_cl)
+top_10_cl_dg <- DL_dg[names(DL_dg) %in% names(top_10_cl)]
+top_10_cl_bt <- DL_bt[names(DL_bt) %in% names(top_10_cl)]
+top_10_cl_edges <- DL_nodes[DL_nodes$airport_code %in% names(top_10_cl),]
+
+top_10_cl_df$degree <- top_10_cl_dg[match(top_10_cl_df$name, names(top_10_cl_dg))]
+top_10_cl_df$betweenness <- top_10_cl_bt[match(top_10_cl_df$name, names(top_10_cl_bt))]
+top_10_cl_DL <- merge(x = top_10_cl_df, y = top_10_cl_edges, by.x = 'name', by.y = 'airport_code')
+top_10_cl_DL$id <- NULL
+#top_10_cl_DL
+
+top_10_cl_DL <- top_10_cl_DL[order(top_10_cl_DL$closeness, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "Seats", "city", "country")]
+remove(list = c('top_10_cl', 'top_10_cl_dg', 'top_10_cl_bt', 'top_10_cl_df', 'top_10_cl_edges'))
+names(top_10_cl_DL)[5]<-"Seats"
+kable(top_10_cl_DL)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 9)%>%
+  add_header_above(c( "Delta Airlines Nodes Ranked by Closeness Centrality" = 8))
+
+####################################################################################################################################
+####################################################################################################################################
+
+#### Top 10 Closeness Centrality for American Airlines
+top_10_cl <- head(sort(AA_cl, decreasing = TRUE) ,10)
+top_10_cl_df <- data.frame(name = names(top_10_cl), closeness = top_10_cl)
+top_10_cl_dg <- AA_dg[names(AA_dg) %in% names(top_10_cl)]
+top_10_cl_bt <- AA_bt[names(AA_bt) %in% names(top_10_cl)]
+top_10_cl_edges <- AA_nodes[AA_nodes$airport_code %in% names(top_10_cl),]
+
+top_10_cl_df$degree <- top_10_cl_dg[match(top_10_cl_df$name, names(top_10_cl_dg))]
+top_10_cl_df$betweenness <- top_10_cl_bt[match(top_10_cl_df$name, names(top_10_cl_bt))]
+top_10_cl_AA <- merge(x = top_10_cl_df, y = top_10_cl_edges, by.x = 'name', by.y = 'airport_code')
+top_10_cl_AA$id <- NULL
+#top_10_cl_AA
+
+top_10_cl_AA <- top_10_cl_AA[order(top_10_cl_AA$closeness, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "Seats", "city", "country")]
+remove(list = c('top_10_cl', 'top_10_cl_dg', 'top_10_cl_bt', 'top_10_cl_df', 'top_10_cl_edges'))
+names(top_10_cl_AA)[5]<-"Seats"
+kable(top_10_cl_AA)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 9)%>%
+  add_header_above(c( "American Airlines Nodes Ranked by Closeness Centrality" = 8))
+
+####################################################################################################################################
+####################################################################################################################################
+
+#### Top 10 Closeness Centrality for United Airlines
+top_10_cl <- head(sort(UA_cl, decreasing = TRUE) ,10)
+top_10_cl_df <- data.frame(name = names(top_10_cl), closeness = top_10_cl)
+top_10_cl_dg <- UA_dg[names(UA_dg) %in% names(top_10_cl)]
+top_10_cl_bt <- UA_bt[names(UA_bt) %in% names(top_10_cl)]
+top_10_cl_edges <- UA_nodes[UA_nodes$airport_code %in% names(top_10_cl),]
+
+top_10_cl_df$degree <- top_10_cl_dg[match(top_10_cl_df$name, names(top_10_cl_dg))]
+top_10_cl_df$betweenness <- top_10_cl_bt[match(top_10_cl_df$name, names(top_10_cl_bt))]
+top_10_cl_UA <- merge(x = top_10_cl_df, y = top_10_cl_edges, by.x = 'name', by.y = 'airport_code')
+top_10_cl_UA$id <- NULL
+
+#top_10_cl_UA
+top_10_cl_UA <- top_10_cl_UA[order(top_10_cl_UA$closeness, decreasing = TRUE),c("degree", "betweenness", "closeness", "name", "Seats", "city", "country")]
+remove(list = c('top_10_cl', 'top_10_cl_dg', 'top_10_cl_bt', 'top_10_cl_df', 'top_10_cl_edges'))
+names(top_10_cl_UA)[5]<-"Seats"
+kable(top_10_cl_UA)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 9)%>%
+  add_header_above(c( "United Airlines Nodes Ranked by Closeness Centrality" = 8))
+
+####################################################################################################################################
+####################################################################################################################################
+
+#The Closeness Centrality measures how close a node is from all the other nodes, considering the shortest distance 
+#to each node.
+
+#Eigen Centrality
+#In graph theory, eigenvector centrality is a measure of the influence of a node in a network. 
+#Relative scores are assigned to all nodes in the network based on the concept that connections 
+#to high-scoring nodes contribute more to the score of the node in question than equal connections 
+#to low-scoring nodes. A high eigenvector score means that a node is connected to many nodes who 
+#themselves have high scores.
+DL_ec <- eigen_centrality(DL_g_s)
+AA_ec <- eigen_centrality(AA_g_s)
+UA_ec <- eigen_centrality(UA_g_s)
+
+#Vector with centrality scores
+#DL_ec$vector
+#AA_ec$vector
+#UA_ec$vector
+
+result_value <- rbind('Eigenvalue corresponding to the calculated eigenvector (Delta Airlines)',round(DL_ec$value,2),'Eigenvalue corresponding to the calculated eigenvector (American Airlines)',round(AA_ec$value,2), 'Eigenvalue corresponding to the calculated eigenvector (United Airlines)',round(UA_ec$value,2))
+kable(result_value)%>%
+  kable_styling(bootstrap_options = "striped", font_size = 12, full_width = F, position = "center")
+####################################################################################################################################
+####################################################################################################################################
+
+```
+
+</br>
+
+## Itinerary Quality Score (IQS)
+
+The overarching objective of the present analysis is to **form a prototype to help travelers determine the best possible path to get from point A to point B**. The resulting index is called the **Itinerary Quality Score (IQS)** and takes into account 5 criteria to determine the optimal itinerary, travelers should book. Each criterion is rated out of 1; the IQS is rated out of 5. 
+
+The 5 criteria below:
+
+**1. Circuity Score:** 
+
+Circuity in the incremental distance a traveler has to cover when connecting through a particular airport over a nonstop itinerary. For  example, if AAA-CCC is 1,000-mile long, and AAA-BBB-CCC is 1,300-mile long, the reported circuity is 30%. A high score on circuity means a low % circuity - the itinerary is more desirable because the connection is not far out of the traveler's way. This was done by inputting the weights on each edge as the distance in miles between the 2 cities. 
+
+**2. Capacity Score:**
+
+Routes with high seat capacity are more desirable for travelers. The passenger can easily be rebooked in case of unforeseen circumstances (Delays, overbookings, etc.) if more seats are available. Therefore, a connecting itinerary where both segments have higher seat capacity are more attractive than where both segments are not operated frequently. The capacity score was calculated by attributing weights to the edges; a high capacity capacity score implied a high seat capacity on the route in relation to the seat capacity of the carrier's busiest route. 
+
+**3. Market Presence Score:**
+
+Carriers are more attractive to passengers in cities where they have a large presence; British Airways has a large frequent flyer base in London; Iberia in Madrid, etc. A market presence score was calculated by averaging the eigen centalities of each aiport the itinerary is touching; the origin, the connect point(s), and the final destination. A high eigen centrality results in a high market presence score. 
+
+**4. Hub Score:**
+
+The hub score is the number of potental stopovers for the passenger to get from A to B. For instance, in the example below, the passenger was looking to travel from Los Angeles, California (LAX) to Dayton, Ohio (DAY). Delta could offer single-connect itineraries either through Atlanta (ATL), Detroit (DTW), or Minneapolis (MSP). Airlines that can offer many potential connect points are perceived as more attractive. For instance, if a storm hits ATL, Delta can still re-book the passenger through an unaffected hub. A higher number of potential connect points means a higher hub score. 
+
+**5. Stopover Score:**
+
+Itineraries with fewer connections are perceived as more attractive by most passengers. A nonstop flight is better than a connecting itinerary, which itself is better than having to connect twice, etc. Fewer stopovers required for the itinerary means a higher stopover score. 
+
+All 5 scores above are summed; **the itinerary with the highest overall score out of 5 is considered the most attractive**, and should be recommended to passengers flying between the two cities. 
+
+```{r delta itinerary, echo = FALSE, warning=FALSE, message=FALSE}
+####################################################################################################################################
+####################################################################################################################################
+
+## Define scoring functions. They will first be applied to Delta Air Lines.
+
+origin <- 'LAX'
+dest <- 'DAY'
+
+# Give a penalty as number of stopovers increases
+
+stopover_score <- function(distances) {
+  stopover_score <- 1/distances[origin,dest]
+  return(stopover_score)
+}
+
+# Give a higher score if the airline can connect the city pair via many hubs - can come in handy in case of delays affecting one particular hub. 
+
+hub_score <- function(hub_list) {
+  hub_score <- 1-(1/(length(airport_list)))^2
+  return(hub_score)
+}
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 1: Obtain the minimum number of stopovers required to complete itinerary
+
+DL_distances <- distances(DL_g, mode = "all")
+DL_stopover_score <- stopover_score(DL_distances)
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 2: Look up all possible connect points that comply with the minimum number of stopovers, and weigh them by airline presence and circuity
+
+dl_itineraries <- all_shortest_paths(DL_g, from=origin, to=dest)
+
+airport_index  <- vector()
+for (i in 2:length(dl_itineraries$res)) {
+  airport_index <- c(airport_index, as.vector(dl_itineraries$res[[i]]))}
+
+airports <- unique(airport_index)
+
+airport_list  <- vector()
+for (i in 2:length(airports)) {
+  airport_list <- c(airport_list, as.vector(get.vertex.attribute(DL_g,'name')[airports[[i]]]))}
+
+airport_list <- airport_list[!airport_list %in% c(origin,dest)]
+DL_hubs_score <- hub_score(airport_list)
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 3: For each of the possible hubs in the list, come up with a the circuity of the itinerary over a nonstop service between the said origin and destination.
+
+nonstop_dist <- distm(c(df1[df1$airport_code==origin,'longitude'],df1[df1$airport_code==origin,'latitude']), 
+                      c(df1[df1$airport_code==dest,'longitude'],df1[df1$airport_code==dest,'latitude']), 
+                      fun = distHaversine)[1,1]/8000*5
+
+adj=get.adjacency(DL_g_d,attr='weight')
+
+itinerary_table <- data.frame(paste0('DL-',airport_list))
+
+for (i in 1:length(airport_list)) {
+  itinerary_table$circuity_score[i] <- 1/((adj[origin,airport_list[i]] + 
+                                   adj[dest,airport_list[i]])/nonstop_dist)^2
+}
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 4: Attribute a market presence score to each itinerary. The higher the seat capacity the airline has on an individual route, the higher the score will be. Itineraries where the airline has more market presence are more desirable; airlines will have more seat capacity to re-accommodate passengers in case of delay/cancellation. 
+
+adj_s=get.adjacency(DL_g_s,attr='weight')
+
+busiest_route <- max(adj_s)*2
+
+for (i in 1:length(airport_list)) {
+  itinerary_table$capacity_score[i] <- ((adj_s[origin,airport_list[i]] +
+                                                      adj_s[dest,airport_list[i]])/(busiest_route))^(1/4)
+}
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 5: For each point the itinerary is touching, the note's centrality will be calculated. Airlines are more likely to have a strong frequent flyer base, and be perceived as more appealing, in cities that are important to their network. 
+
+for (i in 1:length(airport_list)) {
+  itinerary_table$market_presence_score[i] <- (DL_ec$vector[[origin]]^(1/6) +
+                                              DL_ec$vector[[dest]]^(1/6) +
+                                              DL_ec$vector[[airport_list[i]]]^(1/6))/3
+}
+
+colnames(itinerary_table)[1] <- 'itinerary'
+itinerary_table$hub_score <- hub_score(airport_list)
+itinerary_table$score_stopover <- stopover_score(DL_distances)
+itinerary_table$itinerary_score <- rowSums(itinerary_table[,-1])
+dl_itinerary_table  <- itinerary_table
+####################################################################################################################################
+####################################################################################################################################
+```
+
+```{r united itinerary, echo = FALSE, warning=FALSE, message=FALSE}
+####################################################################################################################################
+####################################################################################################################################
+
+## Repeat the process to assess all the travel options for United Airlines.
+## Step 1: Obtain the minimum number of stopovers required to complete itinerary
+
+UA_distances <- distances(UA_g, mode = "all")
+UA_stopover_score <- stopover_score(UA_distances)
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 2: Look up all possible connect points that comply with the minimum number of stopovers, and weigh them by airline presence and circuity
+
+ua_itineraries <- all_shortest_paths(UA_g, from=origin, to=dest)
+
+airport_index  <- vector()
+for (i in 2:length(ua_itineraries$res)) {
+  airport_index <- c(airport_index, as.vector(ua_itineraries$res[[i]]))}
+
+airports <- unique(airport_index)
+
+airport_list  <- vector()
+for (i in 2:length(airports)) {
+  airport_list <- c(airport_list, as.vector(get.vertex.attribute(UA_g,'name')[airports[[i]]]))}
+
+airport_list <- airport_list[!airport_list %in% c(origin,dest)]
+UA_hubs_score <- hub_score(airport_list)
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 3: For each of the possible hubs in the list, come up with a the circuity of the itinerary over a nonstop service between the said origin and destination.
+
+nonstop_dist <- distm(c(df1[df1$airport_code==origin,'longitude'],df1[df1$airport_code==origin,'latitude']), 
+                      c(df1[df1$airport_code==dest,'longitude'],df1[df1$airport_code==dest,'latitude']), 
+                      fun = distHaversine)[1,1]/8000*5
+
+adj=get.adjacency(UA_g_d,attr='weight')
+
+itinerary_table <- data.frame(paste0('UA-',airport_list))
+
+for (i in 1:length(airport_list)) {
+  itinerary_table$circuity_score[i] <- 1/((adj[origin,airport_list[i]] + 
+                                   adj[dest,airport_list[i]])/nonstop_dist)^2
+}
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 4: Attribute a market presence score to each itinerary. The higher the seat capacity the airline has on an individual route, the higher the score will be. Itineraries where the airline has more market presence are more desirable; airlines will have more seat capacity to re-accommodate passengers in case of delay/cancellation. 
+
+adj_s=get.adjacency(UA_g_s,attr='weight')
+
+busiest_route <- max(adj_s)*2
+
+for (i in 1:length(airport_list)) {
+  itinerary_table$capacity_score[i] <- ((adj_s[origin,airport_list[i]] +
+                                                      adj_s[dest,airport_list[i]])/(busiest_route))^(1/4)
+}
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 5: For each point the itinerary is touching, the note's centrality will be calculated. Airlines are more likely to have a strong frequent flyer base, and be perceived as more appealing, in cities that are important to their network. 
+
+for (i in 1:length(airport_list)) {
+  itinerary_table$market_presence_score[i] <- (UA_ec$vector[[origin]]^(1/6) +
+                                              UA_ec$vector[[dest]]^(1/6) +
+                                              UA_ec$vector[[airport_list[i]]]^(1/6))/3
+}
+
+colnames(itinerary_table)[1] <- 'itinerary'
+itinerary_table$hub_score <- hub_score(airport_list)
+itinerary_table$score_stopover <- stopover_score(UA_distances)
+itinerary_table$itinerary_score <- rowSums(itinerary_table[,-1])
+ua_itinerary_table  <- itinerary_table
+
+####################################################################################################################################
+####################################################################################################################################
+```
+
+```{r american itinerary, echo = FALSE, warning=FALSE, message=FALSE}
+####################################################################################################################################
+####################################################################################################################################
+
+## Repeat the process to assess all the travel options for American Airlines.
+## Step 1: Obtain the minimum number of stopovers required to complete itinerary
+
+AA_distances <- distances(AA_g, mode = "all")
+AA_stopover_score <- stopover_score(AA_distances)
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 2: Look up all possible connect points that comply with the minimum number of stopovers, and weigh them by airline presence and circuity
+
+aa_itineraries <- all_shortest_paths(AA_g, from=origin, to=dest)
+
+airport_index  <- vector()
+for (i in 2:length(aa_itineraries$res)) {
+  airport_index <- c(airport_index, as.vector(aa_itineraries$res[[i]]))}
+
+airports <- unique(airport_index)
+
+airport_list  <- vector()
+for (i in 2:length(airports)) {
+  airport_list <- c(airport_list, as.vector(get.vertex.attribute(AA_g,'name')[airports[[i]]]))}
+
+airport_list <- airport_list[!airport_list %in% c(origin,dest)]
+AA_hubs_score <- hub_score(airport_list)
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 3: For each of the possible hubs in the list, come up with a the circuity of the itinerary over a nonstop service between the said origin and destination.
+
+nonstop_dist <- distm(c(df1[df1$airport_code==origin,'longitude'],df1[df1$airport_code==origin,'latitude']), 
+                      c(df1[df1$airport_code==dest,'longitude'],df1[df1$airport_code==dest,'latitude']), 
+                      fun = distHaversine)[1,1]/8000*5
+
+adj=get.adjacency(AA_g_d,attr='weight')
+
+itinerary_table <- data.frame(paste0('AA-',airport_list))
+
+for (i in 1:length(airport_list)) {
+  itinerary_table$circuity_score[i] <- 1/((adj[origin,airport_list[i]] + 
+                                   adj[dest,airport_list[i]])/nonstop_dist)^2
+}
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 4: Attribute a capacity score to each itinerary. The higher the seat capacity the airline has on an individual route, the higher the score will be. Itineraries where the airline has more market presence are more desirable; airlines will have more seat capacity to re-accommodate passengers in case of delay/cancellation. 
+
+adj_s=get.adjacency(AA_g_s,attr='weight')
+
+busiest_route <- max(adj_s)*2
+
+for (i in 1:length(airport_list)) {
+  itinerary_table$capacity_score[i] <- ((adj_s[origin,airport_list[i]] +
+                                                      adj_s[dest,airport_list[i]])/(busiest_route))^(1/4)
+}
+
+####################################################################################################################################
+####################################################################################################################################
+
+## Step 5: For each point the itinerary is touching, the note's centrality will be calculated. Airlines are more likely to have a strong frequent flyer base, and be perceived as more appealing, in cities that are important to their network. 
+
+for (i in 1:length(airport_list)) {
+  itinerary_table$market_presence_score[i] <- (AA_ec$vector[[origin]]^(1/6) +
+                                              AA_ec$vector[[dest]]^(1/6) +
+                                              AA_ec$vector[[airport_list[i]]]^(1/6))/3
+}
+
+colnames(itinerary_table)[1] <- 'itinerary'
+itinerary_table$hub_score <- hub_score(airport_list)
+itinerary_table$score_stopover <- stopover_score(AA_distances)
+itinerary_table$itinerary_score <- rowSums(itinerary_table[,-1])
+aa_itinerary_table  <- itinerary_table
+
+####################################################################################################################################
+####################################################################################################################################
+```
+
+
+```{r summary, echo=FALSE, warning=FALSE, message=FALSE}
+
+results <- rbind(dl_itinerary_table, ua_itinerary_table, aa_itinerary_table)
+results <- results[order(-results$itinerary_score),]
+kable(results) %>%
+  kable_styling(bootstrap_options = "striped", font_size = 9)%>%
+  add_header_above(c(" ", " Itinerary Quality Score Table" = 7))
+
+```
+
+***
+
+# Conclusion
+<span style="color:blue">
+</span>
+
+In the example above, United Airlines offered a single-connect service from Los Angeles (LAX) to Dayton (DAY) via Chicago O'Hare (ORD) and obtained the best itinerary score. **It is thus the optimal path between the passenger's origin and destination**. United's option via Denver (DEN) came in second place. This is a way to fully leverage network data and make compelling recommendations to travelers regarding their choice of itineraries. This tool would likely be used by business travelers, as this segment tends to be more sensitive to duration and convenience, rather than the ticket price. 
+
+In order to fully roll out the above methodology, **more precise schedule data should be gathered**, which would include arrival and departure times of each flight. Rather than assuming connections are built because two airports are served from one hub, the user could establish a time window outside of which the connection should not be built. In the above example, the United could only connect LAX with DAY if the connect time in Chicago is greater than 30 minutes (To allow for the change of planes) but shorter than 5 hours (Anything greater would discourage travelers). Furthermore, other factors could be taken into account to better assess the quality of the itinerary: **the type of aircraft** (Flying on a turboprop would result in a penalty to the score), **whether or not the flight has a codeshare** (Codeshares typically mean greater visibility in booking engines and international connectivity).
+
+***
+
+###### *Vratul Kapur | Irune Maury Arrue | Paul Jacques-Mignault | Sheena Miles | Ashley O'Mahony | Stavros Tsentemeidis | Karl Westphal*
+###### *O17 (Group G) | Master in Big Data and Business Analytics | Oct 2018 Intake | IE School of Human Sciences and Technology*
+
+</br></br>
+
+
