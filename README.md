@@ -1,4 +1,4 @@
-# Social-Network-Analysis
+# Social Network Analysis in R
 
 All the files of this project are saved in a [GitHub repository](https://github.com/stsentemeidis/Social_Network_Analysis-R).
 
